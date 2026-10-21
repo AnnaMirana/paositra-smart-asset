@@ -309,14 +309,57 @@ export default function BonsSortie() {
                                 alert("Aucune ligne trouvée pour ce bon.");
                                 return;
                               }
-                              for (const ligne of lignesBon) {
+
+                              const lignesDemandees = lignesBon.filter(l => l.etat_ligne === 'demandee');
+                              if (lignesDemandees.length === 0) {
+                                alert("Toutes les lignes de ce bon ont déjà été traitées.");
+                                return;
+                              }
+
+                              // On récupère la liste des types d'articles pour connaître leur stock actuel en temps réel
+                              const typesArticles = await api.list('types-article');
+
+                              for (const ligne of lignesDemandees) {
                                 const nomArticle = ligne.type_article_nom || "Article";
-                                const qteSaisie = prompt(`Quantité autorisée pour la ligne (${nomArticle} demandée : ${ligne.quantite_demandee}) :`, ligne.quantite_demandee);
-                                if (qteSaisie === null) return;
-                                const quantite = parseInt(qteSaisie, 10);
-                                const motif = quantite !== ligne.quantite_demandee ? prompt(`Motif obligatoire pour ${nomArticle} :`) || "" : "";
+                                
+                                // Trouver le type correspondant pour afficher son stock réel
+                                const typeInfo = (typesArticles || []).find(t => String(t.id) === String(ligne.type_article));
+                                const stockActuel = typeInfo ? typeInfo.quantite_stock : "Inconnu";
+
+                                let quantite = -1;
+                                let motif = "";
+
+                                while (true) {
+                                  const messagePrompt = `[STOCK DISPONIBLE : ${stockActuel}]\nArticle : ${nomArticle}\nQuantité demandée : ${ligne.quantite_demandee}\n\nEntrez la quantité autorisée (0 pour refuser) :`;
+                                  const qteSaisie = prompt(messagePrompt, Math.min(ligne.quantite_demandee, typeof stockActuel === 'number' ? stockActuel : ligne.quantite_demandee));
+                                  
+                                  if (qteSaisie === null) return; // Annulation globale
+
+                                  quantite = parseInt(qteSaisie, 10);
+                                  if (isNaN(quantite) || quantite < 0) {
+                                    alert("Veuillez entrer un nombre valide positif ou nul.");
+                                    continue;
+                                  }
+
+                                  // Vérification si la quantité dépasse le stock disponible
+                                  if (typeof stockActuel === 'number' && quantite > stockActuel) {
+                                    alert(`Erreur : La quantité autorisée (${quantite}) ne peut pas dépasser le stock physique disponible (${stockActuel}). Veuillez corriger.`);
+                                    continue; // On boucle sur le prompt pour qu'il ressaisisse la bonne valeur
+                                  }
+
+                                  if (quantite !== ligne.quantite_demandee) {
+                                    motif = prompt(`Motif obligatoire pour ${nomArticle} (différence de quantité ou stock insuffisant) :`) || "";
+                                    if (!motif.trim()) {
+                                      alert("Un motif est obligatoire lorsque la quantité est modifiée.");
+                                      continue;
+                                    }
+                                  }
+                                  break; // Sort de la boucle de saisie si tout est OK
+                                }
+
                                 await api.autoriser(ligne.id, quantite, motif);
                               }
+
                               reload();
                               alert("Bon de sortie autorisé avec succès !");
                             } catch (err) {

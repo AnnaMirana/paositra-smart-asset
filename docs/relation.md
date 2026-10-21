@@ -64,3 +64,4 @@ demandeur remplacé par type_entité
 dans l'interface rajouter direct la permission à l'admin de rajouter des catégories , types , etc directement via l'nterface et non dans l'admin django
 nom,prenom,matricul pour les logins pour voir les suivis 
 pour dsid on laisse mais apres dans dca , on partage en 2 catégories le dsid clique sur qui des dca peux le voir(dga ou dg sinon il peut mettre direct en came et ne passe pas par dca)
+Erreur lors de l'autorisation : Cette ligne a déjà été traitée par le DSID. j ai ca car le demandeur a mis 3 lignes , ordi , confirmer , imprimante confirme mais diminuer , et enfin l encre stock erreur stock 0 du coup , et ca arrive pas vers dca, et quand je reclique en tant que dsid pour envoyer ça blque et envoie cette ligne du début
