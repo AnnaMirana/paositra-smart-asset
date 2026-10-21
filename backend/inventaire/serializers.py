@@ -71,7 +71,12 @@ class EntreeSerializer(serializers.ModelSerializer):
 
     def get_lignes(self, obj):
         return [
-            {'type_article': l.type_article.nom_type_article, 'quantite': l.quantite}
+            {
+                'id': l.id,
+                'type_article_id': l.type_article.id,
+                'type_article': l.type_article.nom_type_article,
+                'quantite': l.quantite
+            }
             for l in obj.lignes.all()
         ]
 # ----- Workflow du Bon de Sortie -----
