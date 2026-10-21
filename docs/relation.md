@@ -52,3 +52,17 @@ ligne_sortie(1,1)<->(0,n)utilisateur
             (1,1)<->(1,n) categorie
             (0,1)<->(1,n) type_article
             (0,1)<->(1,n) direction
+
+nom précis par ligne de sortie
+fichier détail par BS , meme si refusé (lien reference) et suivis par article par reference ou qr code pour accéder au liste de ceux qui sont sorti 
+demandeur ne voit pas le stock mais juste ce qui a déjà été sorti pour lui
+historique matériel individuel reste mais les consommable  peuvent etre reinitialiser(par an/bouton reset pour admin) 
+auditeur peux regarder toutes les historiques par agences , ou en global
+demandeur pou upload docc bs, came quand c'est sorti
+came seule peut upload les docs pour l entrée
+export fichier de l'état pour chaque fichier
+entité et demandeur relié 
+demandeur remplacé par type_entité
+dans l'interface rajouter direct la permission à l'admin de rajouter des catégories , types , etc directement via l'nterface et non dans l'admin django
+nom,prenom,matricul pour les logins pour voir les suivis 
+pour dsid on laisse mais apres dans dca , on partage en 2 catégories le dsid clique sur qui des dca peux le voir(dga ou dg sinon il peut mettre direct en came et ne passe pas par dca)

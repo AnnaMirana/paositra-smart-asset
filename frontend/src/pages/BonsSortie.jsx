@@ -141,7 +141,6 @@ export default function BonsSortie() {
                           className="btn btn-sm btn-primary"
                           onClick={async () => {
                             try {
-                              // Récupérer les lignes de ce bon pour les autoriser
                               const lignesBon = await api.list('lignes-bsortie', { bon_sortie: b.id });
                               if (!lignesBon || lignesBon.length === 0) {
                                 alert("Aucune ligne trouvée pour ce bon.");
@@ -149,11 +148,15 @@ export default function BonsSortie() {
                               }
                               
                               for (const ligne of lignesBon) {
-                                const qteSaisie = prompt(`Quantité autorisée pour la ligne (demandée : ${ligne.quantite_demandee}) :`, ligne.quantite_demandee);
-                                if (qteSaisie === null) return; // Annulé par l'utilisateur
+                                const nomArticle = ligne.type_article_nom || "Article";
+                                const qteSaisie = prompt(
+                                  `Quantité autorisée pour la ligne (${nomArticle} demandée : ${ligne.quantite_demandee}) :`, 
+                                  ligne.quantite_demandee
+                                );
+                                if (qteSaisie === null) return;
                                 
                                 const quantite = parseInt(qteSaisie, 10);
-                                const motif = quantite !== ligne.quantite_demandee ? prompt("Motif obligatoire (quantité modifiée) :") || "" : "";
+                                const motif = quantite !== ligne.quantite_demandee ? prompt(`Motif obligatoire pour ${nomArticle} :`) || "" : "";
                                 
                                 await api.autoriser(ligne.id, quantite, motif);
                               }
@@ -182,18 +185,26 @@ export default function BonsSortie() {
                                   return;
                                 }
                                 
-                                for (const ligne of lignesBon) {
-                                  // On affiche les infos de la demande, l'autorisation et le motif du DSID s'il existe
+                                // FILTRE CLÉ : On ne garde que les lignes qui ont été autorisées par le DSID (quantité > 0 ou etat 'autorisee')
+                                const lignesAValider = lignesBon.filter(l => l.etat_ligne === 'autorisee' || (l.quantite_autorisee !== null && l.quantite_autorisee > 0));
+                                
+                                if (lignesAValider.length === 0) {
+                                  alert("Toutes les lignes de ce bon ont été refusées par le DSID. Aucune validation DCA requise.");
+                                  return;
+                                }
+                                
+                                for (const ligne of lignesAValider) {
+                                  const nomArticle = ligne.type_article_nom || "Article";
                                   const qteAutorisee = ligne.quantite_autorisee ?? ligne.quantite_demandee;
                                   const motifDsid = ligne.motif_autorisation || ligne.motif || "Aucun motif";
                                   
-                                  const messagePrompt = `Ligne — Demandé : ${ligne.quantite_demandee} | Autorisé DSID : ${qteAutorisee}\nMotif DSID : "${motifDsid}"\n\nEntrez la quantité à valider :`;
+                                  const messagePrompt = `Article : ${nomArticle}\nDemandé : ${ligne.quantite_demandee} | Autorisé DSID : ${qteAutorisee}\nMotif DSID : "${motifDsid}"\n\nEntrez la quantité à valider :`;
                                   
                                   const qteSaisie = prompt(messagePrompt, qteAutorisee);
                                   if (qteSaisie === null) return; // Annulé
                                   
                                   const quantite = parseInt(qteSaisie, 10);
-                                  const motif = quantite !== qteAutorisee ? prompt("Motif obligatoire (quantité modifiée par rapport à l'autorisation) :") || "" : "";
+                                  const motif = quantite !== qteAutorisee ? prompt(`Motif obligatoire pour ${nomArticle} (modifié) :`) || "" : "";
                                   
                                   await api.valider(ligne.id, quantite, motif);
                                 }
@@ -208,32 +219,33 @@ export default function BonsSortie() {
                             Valider (DCA)
                           </button>
                         )}
-                        {/* Bouton Effectuer la sortie pour le CAME */}
-                          {(b.statut === 'valide' || b.statut === 'Validé') && peutSortir(user) && (
-                            <button
-                              type="button"
-                              className="btn btn-sm btn-success"
-                              onClick={async () => {
-                                try {
-                                  const dateDuJour = new Date().toISOString().slice(0, 10);
-                                  const dateSortieSaisie = prompt("Entrez la date de sortie (AAAA-MM-JJ) :", dateDuJour);
-                                  if (dateSortieSaisie === null) return; // Annulé
 
-                                  await api.effectuerSortie({ 
-                                    bon_sortie: b.id, 
-                                    date_sortie: dateSortieSaisie 
-                                  });
-                                  
-                                  reload();
-                                  alert("Sortie physique effectuée avec succès ! Le stock a été mis à jour.");
-                                } catch (err) {
-                                  alert("Erreur lors de la sortie physique : " + err.message);
-                                }
-                              }}
-                            >
-                              Effectuer Sortie (CAME)
-                            </button>
-                          )}
+                      {/* Bouton Effectuer la sortie pour le CAME */}
+                      {(b.statut === 'valide' || b.statut === 'Validé') && peutSortir(user) && (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-success"
+                          onClick={async () => {
+                            try {
+                              const dateDuJour = new Date().toISOString().slice(0, 10);
+                              const dateSortieSaisie = prompt("Entrez la date de sortie (AAAA-MM-JJ) :", dateDuJour);
+                              if (dateSortieSaisie === null) return;
+
+                              await api.effectuerSortie({ 
+                                bon_sortie: b.id, 
+                                date_sortie: dateSortieSaisie 
+                              });
+                              
+                              reload();
+                              alert("Sortie physique effectuée avec succès ! Le stock a été mis à jour.");
+                            } catch (err) {
+                              alert("Erreur lors de la sortie physique : " + err.message);
+                            }
+                          }}
+                        >
+                          Effectuer Sortie (CAME)
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
