@@ -1,7 +1,9 @@
+// src/pages/Articles.jsx
 import { useMemo, useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Card, Empty, ErreurChargement, Field, Loading, PageHeader } from '../components/ui';
+import { fmtDate } from '../lib/format';
 import { useLoad } from '../lib/hooks';
 
 // Exemplaires physiques (types suivis individuellement). Lecture seule : un article naît d'une entrée.
@@ -9,6 +11,11 @@ export default function Articles() {
   const { user } = useAuth();
   const [typeId, setTypeId] = useState('');
   const [recherche, setRecherche] = useState('');
+
+  // États pour la modale d'historique de l'article sélectionné
+  const [articleSelectionne, setArticleSelectionne] = useState(null);
+  const [historiqueArticle, setHistoriqueArticle] = useState([]);
+  const [loadingHistorique, setLoadingHistorique] = useState(false);
 
   const { data: types } = useLoad(() => api.list('types-article', { gestion_individuelle: 'true' }), []);
   const { data, loading, error, reload } = useLoad(() => api.list('articles', { type_article: typeId }), [typeId]);
@@ -19,6 +26,25 @@ export default function Articles() {
       (a) => !q || `${a.ref_article} ${a.num_serie || ''} ${a.qr_code || ''}`.toLowerCase().includes(q),
     );
   }, [data, recherche]);
+
+  // Fonction pour charger l'historique et les mouvements de cet article précis
+  async function ouvrirHistoriqueArticle(article) {
+    setArticleSelectionne(article);
+    setLoadingHistorique(true);
+    try {
+      // Récupère l'ensemble des mouvements pour retrouver ceux liés à cet article
+      const tousMouvements = await api.list('mouvements');
+      const mouvementsArticle = (tousMouvements || []).filter(
+        (m) => String(m.article) === String(article.id)
+      );
+      setHistoriqueArticle(mouvementsArticle);
+    } catch (err) {
+      alert("Erreur lors du chargement de l'historique : " + err.message);
+      setHistoriqueArticle([]);
+    } finally {
+      setLoadingHistorique(false);
+    }
+  }
 
   return (
     <>
@@ -32,6 +58,60 @@ export default function Articles() {
           </a>
           .
         </Alert>
+      )}
+
+      {/* MODALE DE SUIVI / HISTORIQUE DE L'ARTICLE */}
+      {articleSelectionne && (
+        <div className="modal-backdrop" style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
+          <div className="card" style={{ background: '#fff', padding: '2rem', borderRadius: '8px', width: '90%', maxWidth: '750px', maxHeight: '90vh', overflowY: 'auto' }}>
+            <h2>Historique de l'article : {articleSelectionne.ref_article}</h2>
+            <hr style={{ margin: '1rem 0' }} />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
+              <p><strong>Type d'article :</strong> {articleSelectionne.type_article_nom || '—'}</p>
+              <p><strong>Marque :</strong> {articleSelectionne.marque || '—'}</p>
+              <p><strong>N° de série :</strong> {articleSelectionne.num_serie || '—'}</p>
+              <p><strong>Code QR :</strong> {articleSelectionne.qr_code || '—'}</p>
+            </div>
+
+            <h3 style={{ marginTop: '1.5rem' }}>Mouvements et traçabilité</h3>
+            {loadingHistorique ? (
+              <p style={{ marginTop: '1rem' }}>Chargement de l'historique...</p>
+            ) : historiqueArticle.length === 0 ? (
+              <div style={{ background: '#f8fafc', padding: '1rem', borderRadius: '6px', marginTop: '0.5rem' }}>
+                <p style={{ fontSize: '0.9rem', color: '#0369a1', margin: 0 }}>
+                  📦 Cet article est actuellement <strong>en stock</strong> (aucun mouvement de sortie enregistré pour l'instant).
+                </p>
+              </div>
+            ) : (
+              <div className="table-wrap" style={{ marginTop: '0.5rem', maxHeight: '250px', overflowY: 'auto' }}>
+                <table className="table" style={{ width: '100%', fontSize: '0.85rem' }}>
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Type de mouvement</th>
+                      <th>Entité bénéficiaire</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {historiqueArticle.map((m) => (
+                      <tr key={m.id}>
+                        <td>{fmtDate(m.date_mouvement)}</td>
+                        <td><span className="badge">{m.type_mouvement || 'Sortie'}</span></td>
+                        <td><strong>{m.entite_nom || '—'}</strong></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div style={{ marginTop: '2rem', textAlign: 'right' }}>
+              <button type="button" className="btn btn-secondary" onClick={() => setArticleSelectionne(null)}>
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       <Card>
@@ -73,7 +153,15 @@ export default function Articles() {
                 {lignes.map((a) => (
                   <tr key={a.id}>
                     <td>
-                      <strong>{a.ref_article}</strong>
+                      {/* Référence cliquable pour voir l'historique et l'entité de sortie */}
+                      <button
+                        type="button"
+                        onClick={() => ouvrirHistoriqueArticle(a)}
+                        style={{ background: 'none', border: 'none', color: '#0066cc', cursor: 'pointer', fontWeight: 'bold', padding: 0, textDecoration: 'underline' }}
+                        title="Cliquer pour voir l'historique et l'entité de cet article"
+                      >
+                        {a.ref_article}
+                      </button>
                     </td>
                     <td>{a.num_serie || '—'}</td>
                     <td>{a.qr_code || '—'}</td>

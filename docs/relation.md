@@ -53,9 +53,7 @@ ligne_sortie(1,1)<->(0,n)utilisateur
             (0,1)<->(1,n) type_article
             (0,1)<->(1,n) direction
 
-nom précis par ligne de sortie
-fichier détail par BS , meme si refusé (lien reference) et suivis par article par reference ou qr code pour accéder au liste de ceux qui sont sorti maintenant le fiche détailler des bs et entrée référence quand on clique sur eux , avec motif pour bsortie si il y en avait , et de tous les refs des articles individuel aussi
-demandeur ne voit pas le stock mais juste ce qui a déjà été sorti pour lui
+donc dans articles tout est la , mais on doit quand meme faire le suvis donc , clicable aussi les refs des articles pour voir si il est sorti quand , et dans quel entité(nom)
 historique matériel individuel reste mais les consommable  peuvent etre reinitialiser(par an/bouton reset pour admin) 
 auditeur peux regarder toutes les historiques par agences , ou en global
 demandeur pou upload docc bs, came quand c'est sorti
