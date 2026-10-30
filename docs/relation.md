@@ -54,7 +54,7 @@ ligne_sortie(1,1)<->(0,n)utilisateur
             (0,1)<->(1,n) direction
 
 donc dans articles tout est la , mais on doit quand meme faire le suvis donc , clicable aussi les refs des articles pour voir si il est sorti quand , et dans quel entité(nom)
-historique matériel individuel reste mais les consommable  peuvent etre reinitialiser(par an/bouton reset pour admin) 
+historique matériel individuel reste mais les consommable  peuvent etre reinitialiser(par an/bouton reset pour admin) , donc , pour les matériels individuel telle que ordi portable on doit avoir l'historique complet aussi quand on clique sur un matériel depuis son arrivé et tous ces mouvements et chauque annee sera réinitialisé sinon trop de place, quand a ceux qui ne sont pas individuel donc consommable , c'est la meme chose mais juste accompagné d'un bouton reset qui permet de réinitialisé quand on veut 
 auditeur peux regarder toutes les historiques par agences , ou en global
 demandeur pou upload docc bs, came quand c'est sorti
 came seule peut upload les docs pour l entrée

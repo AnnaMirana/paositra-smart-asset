@@ -200,170 +200,245 @@ Historique de chaque article
 Phase 6 — Finalisation
 
 Documentation + sécurité + tests + démonstration + soutenance.
+C'est une excellente décision ! Mettre en place ce **filtre par année** dans la modale d'historique des articles individuels (`Articles.jsx`) est une solution élégante, professionnelle et parfaite pour le jury : elle conserve 100% de la traçabilité légale exigée tout en gardant une interface propre et fluide.
 
-Download the React DevTools for a better development experience: https://reactjs.org/link/react-devtools
-deprecations.ts:9 ⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.
-warnOnce @ deprecations.ts:9
-deprecations.ts:9 ⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.
-warnOnce @ deprecations.ts:9
-2LignesEditor.jsx:29 Uncaught ReferenceError: libelleType is not defined
-    at LignesEditor.jsx:29:26
-    at Array.map (<anonymous>)
-    at LignesEditor.jsx:27:28
-    at Array.map (<anonymous>)
-    at LignesEditor.jsx:25:47
-    at Array.map (<anonymous>)
-    at LignesEditor (LignesEditor.jsx:17:15)
-    at renderWithHooks (react-dom.development.js:15486:18)
-    at mountIndeterminateComponent (react-dom.development.js:20103:13)
-    at beginWork (react-dom.development.js:21626:16)
-react-dom.development.js:18704 The above error occurred in the <LignesEditor> component:
+Voici comment modifier ton fichier **`Articles.jsx`** pour intégrer ce sélecteur/filtre par année dans la modale d'historique des articles :
 
-    at LignesEditor (http://localhost:3000/src/components/LignesEditor.jsx:17:40)
-    at form
-    at section
-    at Card (http://localhost:3000/src/components/ui.jsx:120:24)
-    at Entrees (http://localhost:3000/src/pages/Entrees.jsx:28:20)
-    at RenderedRoute (http://localhost:3000/node_modules/.vite/deps/react-router-dom.js?v=80601f87:4110:5)
-    at Outlet (http://localhost:3000/node_modules/.vite/deps/react-router-dom.js?v=80601f87:4516:26)
-    at main
-    at div
-    at div
-    at Layout (http://localhost:3000/src/components/Layout.jsx:33:28)
-    at RenderedRoute (http://localhost:3000/node_modules/.vite/deps/react-router-dom.js?v=80601f87:4110:5)
-    at Routes (http://localhost:3000/node_modules/.vite/deps/react-router-dom.js?v=80601f87:4580:5)
-    at Contenu (http://localhost:3000/src/App.jsx:32:20)
-    at AuthProvider (http://localhost:3000/src/auth/AuthContext.jsx:22:32)
-    at Router (http://localhost:3000/node_modules/.vite/deps/react-router-dom.js?v=80601f87:4523:15)
-    at BrowserRouter (http://localhost:3000/node_modules/.vite/deps/react-router-dom.js?v=80601f87:5261:5)
-    at App
+```jsx
+// src/pages/Articles.jsx
+import { useMemo, useState } from 'react';
+import { api } from '../api';
+import { useAuth } from '../auth/AuthContext';
+import { Alert, Card, Empty, ErreurChargement, Field, Loading, PageHeader } from '../components/ui';
+import { fmtDate } from '../lib/format';
+import { useLoad } from '../lib/hooks';
 
-Consider adding an error boundary to your tree to customize error handling behavior.
-Visit https://reactjs.org/link/error-boundaries to learn more about error boundaries.
-logCapturedError @ react-dom.development.js:18704
-react-dom.development.js:12056 Uncaught ReferenceError: libelleType is not defined
-    at LignesEditor.jsx:29:26
-    at Array.map (<anonymous>)
-    at LignesEditor.jsx:27:28
-    at Array.map (<anonymous>)
-    at LignesEditor.jsx:25:47
-    at Array.map (<anonymous>)
-    at LignesEditor (LignesEditor.jsx:17:15) 
-
-    auth_api : """
-Authentification pour le frontend React (Mois 2).
-
-Principe : connexion par SESSION Django (cookie), la même que l'admin et l'API
-navigable. React n'a donc aucun jeton à stocker ; il envoie le cookie de session
-et l'en-tête X-CSRFToken (lu dans le cookie csrftoken) pour les requêtes qui
-modifient des données.
-
-  GET  /api/auth/me/      -> qui suis-je ? (profil + rôle) ; pose aussi le cookie CSRF
-  POST /api/auth/login/   -> {username, password}
-  POST /api/auth/logout/
-"""
-from django.contrib.auth import authenticate, login, logout
-from django.views.decorators.csrf import ensure_csrf_cookie
-from django.views.decorators.csrf import csrf_exempt
-from rest_framework import status
-from rest_framework.decorators import api_view, authentication_classes, permission_classes
-from rest_framework.permissions import AllowAny, IsAuthenticated
-from rest_framework.response import Response
-
-
-def _profil(user):
-    return {
-        'authentifie': True,
-        'id': user.id,
-        'username': user.username,
-        'nom_complet': user.get_full_name() or user.username,
-        'role': user.role,
-        'role_libelle': user.get_role_display() if user.role else '',
-        'is_superuser': user.is_superuser,
-        'is_staff': user.is_staff,
-        'entites': list(user.entites.values_list('id', flat=True)),
-    }
-
-
-@ensure_csrf_cookie
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def me(request):
-    if request.user.is_authenticated:
-        return Response(_profil(request.user))
-    return Response({'authentifie': False})
-
-
-@api_view(['POST'])
-@authentication_classes([])          # pas de vérification CSRF pour la connexion elle-même
-@permission_classes([AllowAny])
-def login_view(request):
-    username = str(request.data.get('username', '')).strip()
-    password = str(request.data.get('password', ''))
-    # authenticate() refuse aussi les comptes désactivés (actif=False -> is_active=False).
-    user = authenticate(request, username=username, password=password)
-    if user is None:
-        return Response(
-            {'erreur': 'Identifiant ou mot de passe incorrect, ou compte désactivé.'},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-    login(request, user)
-    return Response(_profil(user))
-
-
-@api_view(['POST'])
-@authentication_classes([])  # Désactive la vérification CSRF / Session de DRF
-@permission_classes([AllowAny])
-def logout_view(request):
-    logout(request)
-    return Response({'authentifie': False}) et App.jsx "// src/App.jsx
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
-import { AuthProvider, useAuth } from './auth/AuthContext';
-import Layout from './components/Layout';
-import { Loading } from './components/ui';
-import Articles from './pages/Articles';
-import BonsSortie from './pages/BonsSortie';
-import Dashboard from './pages/Dashboard';
-import Entrees from './pages/Entrees';
-import Login from './pages/Login';
-import Mouvements from './pages/Mouvements';
-import Referentiels from './pages/Referentiels';
-import Stock from './pages/Stock';
-
-function Contenu() {
+// Exemplaires physiques (types suivis individuellement). Lecture seule : un article naît d'une entrée.
+export default function Articles() {
   const { user } = useAuth();
+  const [typeId, setTypeId] = useState('');
+  const [recherche, setRecherche] = useState('');
 
-  if (user === undefined) return <Loading texte="Vérification de la session…" />;
-  if (!user) return <Login />;
+  // États pour la modale d'historique de l'article sélectionné et le filtre par année
+  const [articleSelectionne, setArticleSelectionne] = useState(null);
+  const [historiqueArticle, setHistoriqueArticle] = useState([]);
+  const [loadingHistorique, setLoadingHistorique] = useState(false);
+  const [anneeFiltre, setAnneeFiltre] = useState('toutes'); // 'toutes' ou une année spécifique (ex: '2026')
+
+  const { data: types } = useLoad(() => api.list('types-article', { gestion_individuelle: 'true' }), []);
+  const { data, loading, error, reload } = useLoad(() => api.list('articles', { type_article: typeId }), [typeId]);
+
+  const lignes = useMemo(() => {
+    const q = recherche.trim().toLowerCase();
+    return (data || []).filter(
+      (a) => !q || `${a.ref_article} ${a.num_serie || ''} ${a.qr_code || ''}`.toLowerCase().includes(q),
+    );
+  }, [data, recherche]);
+
+  // Fonction pour charger l'historique et les mouvements de cet article précis
+  async function ouvrirHistoriqueArticle(article) {
+    setArticleSelectionne(article);
+    setAnneeFiltre('toutes'); // Réinitialiser le filtre par année à l'ouverture
+    setLoadingHistorique(true);
+    try {
+      const tousMouvements = await api.list('mouvements');
+      const mouvementsArticle = (tousMouvements || []).filter(
+        (m) => String(m.article) === String(article.id)
+      );
+      setHistoriqueArticle(mouvementsArticle);
+    } catch (err) {
+      alert("Erreur lors du chargement de l'historique : " + err.message);
+      setHistoriqueArticle([]);
+    } finally {
+      setLoadingHistorique(false);
+    }
+  }
+
+  // Extraire les années disponibles dans l'historique de l'article pour alimenter le sélecteur
+  const anneesDisponibles = useMemo(() => {
+    const anneesSet = new Set();
+    historiqueArticle.forEach(m => {
+      if (m.date_mouvement) {
+        const annee = m.date_mouvement.slice(0, 4);
+        anneesSet.add(annee);
+      }
+    });
+    return Array.from(anneesSet).sort().reverse();
+  }, [historiqueArticle]);
+
+  // Filtrer l'historique selon l'année sélectionnée
+  const historiqueFiltre = useMemo(() => {
+    if (anneeFiltre === 'toutes') return historiqueArticle;
+    return historiqueArticle.filter(m => m.date_mouvement && m.date_mouvement.startsWith(anneeFiltre));
+  }, [historiqueArticle, anneeFiltre]);
 
   return (
-    <Routes>
-      <Route path="/" element={<Layout />}>
-        <Route index element={<Dashboard />} />
-        <Route path="bons-sortie" element={<BonsSortie />} />
-        <Route path="entrees" element={<Entrees />} />
-        <Route path="stock" element={<Stock />} />
-        <Route path="articles" element={<Articles />} />
-        <Route path="mouvements" element={<Mouvements />} />
-        <Route path="referentiels" element={<Referentiels />} />
-      </Route>
-    </Routes>
+    <>
+      <PageHeader titre="Articles" sousTitre="Exemplaires physiques suivis individuellement (ordinateurs, imprimantes…)." />
+
+      {(user.is_staff || user.is_superuser) && (
+        <Alert type="info">
+          Pour compléter une référence, un numéro de série ou un QR code, ouvre l’article dans{' '}
+          <a href="/admin/inventaire/article/" target="_blank" rel="noreferrer">
+            l’administration Django
+          </a>
+          .
+        </Alert>
+      )}
+
+      {/* MODALE DE SUIVI / HISTORIQUE DE L'ARTICLE AVEC FILTRE PAR ANNÉE */}
+      {articleSelectionne && (
+        <div className="modal-backdrop" style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
+          <div className="card" style={{ background: '#fff', padding: '2rem', borderRadius: '8px', width: '90%', maxWidth: '800px', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2>Historique de l'article : {articleSelectionne.ref_article}</h2>
+              
+              {/* Sélecteur d'année pour le filtrage des archives */}
+              {anneesDisponibles.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <label style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>Année :</label>
+                  <select 
+                    value={anneeFiltre} 
+                    onChange={(e) => setAnneeFiltre(e.target.value)}
+                    style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '0.85rem' }}
+                  >
+                    <option value="toutes">Toutes les années</option>
+                    {anneesDisponibles.map(annee => (
+                      <option key={annee} value={annee}>{annee}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            <hr style={{ margin: '1rem 0' }} />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
+              <p><strong>Type d'article :</strong> {articleSelectionne.type_article_nom || '—'}</p>
+              <p><strong>Marque :</strong> {articleSelectionne.marque || '—'}</p>
+              <p><strong>N° de série :</strong> {articleSelectionne.num_serie || '—'}</p>
+              <p><strong>Code QR :</strong> {articleSelectionne.qr_code || '—'}</p>
+            </div>
+
+            <h3 style={{ marginTop: '1.5rem' }}>Mouvements et traçabilité</h3>
+            {loadingHistorique ? (
+              <p style={{ marginTop: '1rem' }}>Chargement de l'historique...</p>
+            ) : historiqueArticle.length === 0 ? (
+              <div style={{ background: '#f8fafc', padding: '1rem', borderRadius: '6px', marginTop: '0.5rem' }}>
+                <p style={{ fontSize: '0.9rem', color: '#0369a1', margin: 0 }}>
+                  📦 Cet article est actuellement <strong>en stock</strong> (aucun mouvement de sortie enregistré).
+                </p>
+              </div>
+            ) : historiqueFiltre.length === 0 ? (
+              <div style={{ background: '#f8fafc', padding: '1rem', borderRadius: '6px', marginTop: '0.5rem' }}>
+                <p style={{ fontSize: '0.9rem', color: '#64748b', margin: 0 }}>
+                  Aucun mouvement enregistré pour l'année sélectionnée ({anneeFiltre}).
+                </p>
+              </div>
+            ) : (
+              <div className="table-wrap" style={{ marginTop: '0.5rem', maxHeight: '250px', overflowY: 'auto' }}>
+                <table className="table" style={{ width: '100%', fontSize: '0.85rem' }}>
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Type de mouvement</th>
+                      <th>Entité bénéficiaire</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {historiqueFiltre.map((m) => (
+                      <tr key={m.id}>
+                        <td>{fmtDate(m.date_mouvement)}</td>
+                        <td><span className="badge">{m.type_mouvement || 'Sortie'}</span></td>
+                        <td><strong>{m.entite_nom || '—'}</strong></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div style={{ marginTop: '2rem', textAlign: 'right' }}>
+              <button type="button" className="btn btn-secondary" onClick={() => setArticleSelectionne(null)}>
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <Card>
+        <div className="filtres">
+          <Field label="Type d’article">
+            <select value={typeId} onChange={(e) => setTypeId(e.target.value)}>
+              <option value="">Tous</option>
+              {(types || []).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.nom_type_article}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Rechercher">
+            <input value={recherche} onChange={(e) => setRecherche(e.target.value)} placeholder="Référence, n° de série, QR…" />
+          </Field>
+        </div>
+
+        {loading && !data ? (
+          <Loading />
+        ) : error && !data ? (
+          <ErreurChargement erreur={error} onRetry={reload} />
+        ) : lignes.length === 0 ? (
+          <Empty>Aucun article.</Empty>
+        ) : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Référence</th>
+                  <th>N° de série</th>
+                  <th>QR code</th>
+                  <th>Type</th>
+                  <th>Marque</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lignes.map((a) => (
+                  <tr key={a.id}>
+                    <td>
+                      <button
+                        type="button"
+                        onClick={() => ouvrirHistoriqueArticle(a)}
+                        style={{ background: 'none', border: 'none', color: '#0066cc', cursor: 'pointer', fontWeight: 'bold', padding: 0, textDecoration: 'underline' }}
+                        title="Cliquer pour voir l'historique et l'entité de cet article"
+                      >
+                        {a.ref_article}
+                      </button>
+                    </td>
+                    <td>{a.num_serie || '—'}</td>
+                    <td>{a.qr_code || '—'}</td>
+                    <td>{a.type_article_nom}</td>
+                    <td>{a.marque || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </>
   );
 }
 
-export default function App() {
-  return (
-    <BrowserRouter>
-      <AuthProvider>
-        <Contenu />
-      </AuthProvider>
-    </BrowserRouter>
-  );
-}"
+```
 
-ok ajd je vais prendre le temps de m'écrire , j ai environ 10 mn pour m exprimer 
-cher moi , sois patiente , bas toi encore , meme si ca fait mal , meme si c'est dure , fatiguant , bats toi encore car il n y a que toi qui puisse le faire , laisse cette amertume , fatigue , stresse te consumé si fort que plus rien ne peux plus t arreter , t as deja tellement fais jusque la , alors je n accepterai pas que tu t eteige maintenant , tu sais , on a tout fait seul , du moins tout ce qu on devait , et c'état la seule cose a faire , le seul choix je te promets que tout cela ne sra pas en vain , je ne suis ni divain , ni dieu , ni une sorciere qui peut te promettre des miracles , non je suis moi, celle de maintenant , celle du passé quand tu liras ca , et pour le moment je sais qu on peut toujours avancer plus vite , plus fort , plus intensément , cher moi , vas y encore , 1 fois , 2 fois , 3 fois et au bout tu seras cette toi qui as tout vecu , jamais abandonné 
+### 🚀 Prochaine étape :
 
-cher moi du passé toi tu es mon idole vivante , l ersonne que je connais autour de moi qui a le plus ete trahi , ecrasé, et pourtant on est la grace a oi alors pour toi tout se resume en un seul mot MERCI 
+Enregistre ce fichier `Articles.jsx`. Tu peux maintenant faire un commit Git pour sceller cette magnifique fonctionnalité de filtrage par année :
 
-enfin cher moi du future , je ne dis pas que toi la t'es vraiment la version sans coeur , je suis sure que parfois dans la nuit on pleure encore n est ce pas ? pour une raison quelonque, mais je sais aussi que t'es la version la plus fine de nous , la plus paufiné, la plus forte , alors cher moi j'espère juste que ta vie ne se résume plus a se battr mais maintenant a profiter 
+```bash
+git add .
+git commit -m "feat: ajout du filtre par année dans la modale d'historique des articles individuels"
+
+```
+
+Veux-tu que l'on prévoie également l'interface ou le bouton pour la réinitialisation des consommables selon ta convenance ?

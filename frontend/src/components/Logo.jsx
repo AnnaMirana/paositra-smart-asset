@@ -7,7 +7,7 @@ export default function Logo({ clair = false }) {
     return (
         <div className={`logo ${clair ? 'logo-clair' : ''}`}>
             {imageOk ? (
-                <img src="/logo-paositra.png" alt="Paositra Malagasy" onError={() => setImageOk(false)} />
+                <img src="./public/logo-paositra.png" alt="Paositra Malagasy" onError={() => setImageOk(false)} />
             ) : (
                 <span className="logo-mark" aria-hidden="true">
                     P

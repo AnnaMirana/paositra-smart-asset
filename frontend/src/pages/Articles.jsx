@@ -1,4 +1,3 @@
-// src/pages/Articles.jsx
 import { useMemo, useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext';
@@ -12,10 +11,11 @@ export default function Articles() {
   const [typeId, setTypeId] = useState('');
   const [recherche, setRecherche] = useState('');
 
-  // États pour la modale d'historique de l'article sélectionné
+  // États pour la modale d'historique de l'article sélectionné et le filtre par année
   const [articleSelectionne, setArticleSelectionne] = useState(null);
   const [historiqueArticle, setHistoriqueArticle] = useState([]);
   const [loadingHistorique, setLoadingHistorique] = useState(false);
+  const [anneeFiltre, setAnneeFiltre] = useState('toutes'); // 'toutes' ou une année spécifique (ex: '2026')
 
   const { data: types } = useLoad(() => api.list('types-article', { gestion_individuelle: 'true' }), []);
   const { data, loading, error, reload } = useLoad(() => api.list('articles', { type_article: typeId }), [typeId]);
@@ -30,9 +30,9 @@ export default function Articles() {
   // Fonction pour charger l'historique et les mouvements de cet article précis
   async function ouvrirHistoriqueArticle(article) {
     setArticleSelectionne(article);
+    setAnneeFiltre('toutes'); // Réinitialiser le filtre par année à l'ouverture
     setLoadingHistorique(true);
     try {
-      // Récupère l'ensemble des mouvements pour retrouver ceux liés à cet article
       const tousMouvements = await api.list('mouvements');
       const mouvementsArticle = (tousMouvements || []).filter(
         (m) => String(m.article) === String(article.id)
@@ -45,6 +45,24 @@ export default function Articles() {
       setLoadingHistorique(false);
     }
   }
+
+  // Extraire les années disponibles dans l'historique de l'article pour alimenter le sélecteur
+  const anneesDisponibles = useMemo(() => {
+    const anneesSet = new Set();
+    historiqueArticle.forEach(m => {
+      if (m.date_mouvement) {
+        const annee = m.date_mouvement.slice(0, 4);
+        anneesSet.add(annee);
+      }
+    });
+    return Array.from(anneesSet).sort().reverse();
+  }, [historiqueArticle]);
+
+  // Filtrer l'historique selon l'année sélectionnée
+  const historiqueFiltre = useMemo(() => {
+    if (anneeFiltre === 'toutes') return historiqueArticle;
+    return historiqueArticle.filter(m => m.date_mouvement && m.date_mouvement.startsWith(anneeFiltre));
+  }, [historiqueArticle, anneeFiltre]);
 
   return (
     <>
@@ -60,11 +78,31 @@ export default function Articles() {
         </Alert>
       )}
 
-      {/* MODALE DE SUIVI / HISTORIQUE DE L'ARTICLE */}
+      {/* MODALE DE SUIVI / HISTORIQUE DE L'ARTICLE AVEC FILTRE PAR ANNÉE */}
       {articleSelectionne && (
         <div className="modal-backdrop" style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
-          <div className="card" style={{ background: '#fff', padding: '2rem', borderRadius: '8px', width: '90%', maxWidth: '750px', maxHeight: '90vh', overflowY: 'auto' }}>
-            <h2>Historique de l'article : {articleSelectionne.ref_article}</h2>
+          <div className="card" style={{ background: '#fff', padding: '2rem', borderRadius: '8px', width: '90%', maxWidth: '800px', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2>Historique de l'article : {articleSelectionne.ref_article}</h2>
+              
+              {/* Sélecteur d'année pour le filtrage des archives */}
+              {anneesDisponibles.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <label style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>Année :</label>
+                  <select 
+                    value={anneeFiltre} 
+                    onChange={(e) => setAnneeFiltre(e.target.value)}
+                    style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '0.85rem' }}
+                  >
+                    <option value="toutes">Toutes les années</option>
+                    {anneesDisponibles.map(annee => (
+                      <option key={annee} value={annee}>{annee}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+
             <hr style={{ margin: '1rem 0' }} />
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
               <p><strong>Type d'article :</strong> {articleSelectionne.type_article_nom || '—'}</p>
@@ -79,7 +117,13 @@ export default function Articles() {
             ) : historiqueArticle.length === 0 ? (
               <div style={{ background: '#f8fafc', padding: '1rem', borderRadius: '6px', marginTop: '0.5rem' }}>
                 <p style={{ fontSize: '0.9rem', color: '#0369a1', margin: 0 }}>
-                  📦 Cet article est actuellement <strong>en stock</strong> (aucun mouvement de sortie enregistré pour l'instant).
+                  📦 Cet article est actuellement <strong>en stock</strong> (aucun mouvement de sortie enregistré).
+                </p>
+              </div>
+            ) : historiqueFiltre.length === 0 ? (
+              <div style={{ background: '#f8fafc', padding: '1rem', borderRadius: '6px', marginTop: '0.5rem' }}>
+                <p style={{ fontSize: '0.9rem', color: '#64748b', margin: 0 }}>
+                  Aucun mouvement enregistré pour l'année sélectionnée ({anneeFiltre}).
                 </p>
               </div>
             ) : (
@@ -93,7 +137,7 @@ export default function Articles() {
                     </tr>
                   </thead>
                   <tbody>
-                    {historiqueArticle.map((m) => (
+                    {historiqueFiltre.map((m) => (
                       <tr key={m.id}>
                         <td>{fmtDate(m.date_mouvement)}</td>
                         <td><span className="badge">{m.type_mouvement || 'Sortie'}</span></td>
@@ -153,7 +197,6 @@ export default function Articles() {
                 {lignes.map((a) => (
                   <tr key={a.id}>
                     <td>
-                      {/* Référence cliquable pour voir l'historique et l'entité de sortie */}
                       <button
                         type="button"
                         onClick={() => ouvrirHistoriqueArticle(a)}
