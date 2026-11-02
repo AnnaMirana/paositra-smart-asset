@@ -1,0 +1,26 @@
+PAOSITRA SMART ASSET — fichiers corrigés
+
+Contenu :
+- models.py
+- services.py
+- views.py
+- serializers.py
+- Mouvements.jsx
+
+Corrections :
+1. Chaque nouveau mouvement conserve le nom déclaré à la connexion et le libellé du rôle au moment de l'opération.
+2. Les mouvements individuels restent enregistrés en base, mais l'interface les regroupe par operation_ref.
+
+IMPORTANT — installation :
+1. Fais une copie de sauvegarde des fichiers actuels.
+2. Remplace les fichiers correspondants par ceux de cette archive.
+3. Dans le dossier backend, exécute :
+   python manage.py makemigrations
+   python manage.py migrate
+4. Redémarre Django.
+5. Redémarre le frontend React.
+
+À savoir :
+- Les mouvements déjà existants n'ont pas le nom déclaré à la connexion : cette information n'était pas enregistrée à l'époque. Pour ces anciennes lignes, l'affichage utilise le nom du profil technique en solution de secours.
+- Les nouveaux mouvements auront le nom déclaré et le rôle enregistrés comme instantané.
+- Le regroupement concerne uniquement les mouvements qui possèdent une operation_ref. Les anciens mouvements restent affichés séparément.

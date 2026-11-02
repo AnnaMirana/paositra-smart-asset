@@ -16,6 +16,7 @@ router.register('lignes-bsortie', views.LigneBSortieViewSet)
 router.register('interventions', views.IntervientViewSet)
 router.register('sorties', views.SortieViewSet)
 router.register('mouvements', views.MouvementViewSet)
+router.register('utilisateurs', views.UtilisateurViewSet, basename='utilisateur')
 
 urlpatterns = [
     path('auth/me/', auth_api.me),

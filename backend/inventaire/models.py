@@ -244,6 +244,11 @@ class Mouvement(models.Model):
     quantite = models.PositiveIntegerField(null=True, blank=True)
 
     utilisateur = models.ForeignKey(Utilisateur, on_delete=models.PROTECT, related_name='mouvements_enregistres')
+    # Identité déclarée à la connexion : snapshot conservé même si le profil du compte change.
+    utilisateur_nom_saisi = models.CharField(max_length=150, blank=True, default='')
+    utilisateur_role_saisi = models.CharField(max_length=100, blank=True, default='')
+    # Plusieurs mouvements physiques peuvent appartenir à une seule opération.
+    operation_ref = models.CharField(max_length=150, blank=True, default='', db_index=True)
     entite = models.ForeignKey(Entite, on_delete=models.PROTECT, related_name='mouvements', null=True, blank=True)
 
     def clean(self):

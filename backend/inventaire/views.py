@@ -12,16 +12,19 @@ from rest_framework.response import Response
 from . import services
 from .models import (
     Article, BonSortie, Categorie, Entite, Entree, Fournisseur, Intervient,
-    LigneBSortie, Mouvement, Sortie, TypeArticle,
+    LigneBSortie, Mouvement, Sortie, TypeArticle, Utilisateur,  # <-- S'assurer que Utilisateur est importé
 )
 from .serializers import (
     ArticleSerializer, BonSortieSerializer, CategorieSerializer, DecisionLigneSerializer,
     EntiteSerializer, EntreeSerializer, FournisseurSerializer, IntervientSerializer,
     LigneBSortieInputSerializer, LigneBSortieSerializer, LigneEntreeInputSerializer,
     MouvementSerializer, SortieInputSerializer, SortieSerializer, TypeArticleSerializer,
+    UtilisateurProfileSerializer,  # <-- Assure-toi que le nom correspond
 )
 
+from rest_framework import serializers
 
+    
 def gerer_erreurs_metier(vue):
     """Traduit les erreurs levées par services.py en réponses HTTP lisibles (400 / 403)."""
     @functools.wraps(vue)
@@ -142,7 +145,11 @@ class EntreeViewSet(mixins.CreateModelMixin, mixins.RetrieveModelMixin, mixins.U
         quantite = entree_data.validated_data['quantite']
 
         ligne, articles = services.enregistrer_ligne_entree(
-            entree=entree, type_article=type_article, quantite=quantite, utilisateur=request.user,
+            entree=entree,
+            type_article=type_article,
+            quantite=quantite,
+            utilisateur=request.user,
+            nom_agent=request.session.get('agent_nom_saisi', ''),
         )
         return Response({
             'ligne_id': ligne.id,
@@ -272,7 +279,11 @@ class SortieViewSet(viewsets.ReadOnlyModelViewSet):
             l['ligne_bsortie']: l['quantite_livree'] for l in donnees.validated_data.get('livraisons', [])
         }
         sortie = services.effectuer_sortie(
-            bon_sortie, donnees.validated_data['date_sortie'], request.user, livraisons,
+            bon_sortie,
+            donnees.validated_data['date_sortie'],
+            request.user,
+            livraisons,
+            nom_agent=request.session.get('agent_nom_saisi', ''),
         )
         return Response(SortieSerializer(sortie).data, status=status.HTTP_201_CREATED)
 
@@ -285,3 +296,16 @@ class MouvementViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         return _filtrer(super().get_queryset(), self.request, ['type_mouvement', 'article', 'type_article', 'entite'])
+
+from rest_framework import serializers
+
+class UtilisateurProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Utilisateur
+        fields = ['id', 'username', 'first_name', 'last_name', 'role']
+        read_only_fields = ['id', 'username', 'role']
+
+class UtilisateurViewSet(mixins.UpdateModelMixin, mixins.RetrieveModelMixin, mixins.ListModelMixin, viewsets.GenericViewSet):
+    queryset = Utilisateur.objects.all()
+    serializer_class = UtilisateurProfileSerializer
+    permission_classes = [IsAuthenticated]

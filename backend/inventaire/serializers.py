@@ -2,7 +2,7 @@ from rest_framework import serializers
 
 from .models import (
     Article, BonSortie, Categorie, Entite, Entree, Fournisseur, Intervient,
-    LigneBSortie, LigneSortie, Mouvement, Sortie, TypeArticle,
+    LigneBSortie, LigneSortie, Mouvement, Sortie, TypeArticle, Utilisateur,
 )
 
 
@@ -33,7 +33,7 @@ class TypeArticleSerializer(serializers.ModelSerializer):
             'id', 'nom_type_article', 'marque', 'caracteristique', 'quantite_stock',
             'gestion_individuelle', 'categorie', 'categorie_nom',
         ]
-        read_only_fields = ['quantite_stock']  # jamais modifiable à la main, voir services.py
+        read_only_fields = ['quantite_stock']
 
 
 class ArticleSerializer(serializers.ModelSerializer):
@@ -75,10 +75,12 @@ class EntreeSerializer(serializers.ModelSerializer):
                 'id': l.id,
                 'type_article_id': l.type_article.id,
                 'type_article': l.type_article.nom_type_article,
-                'quantite': l.quantite
+                'quantite': l.quantite,
             }
             for l in obj.lignes.all()
         ]
+
+
 # ----- Workflow du Bon de Sortie -----
 
 class IntervientSerializer(serializers.ModelSerializer):
@@ -105,7 +107,6 @@ class LigneBSortieSerializer(serializers.ModelSerializer):
             'quantite_demandee', 'quantite_autorisee', 'quantite_validee', 'etat_ligne',
             'interventions',
         ]
-        # quantités décidées et état : uniquement modifiés par le workflow (services.py)
         read_only_fields = ['bon_sortie', 'quantite_autorisee', 'quantite_validee', 'etat_ligne']
 
 
@@ -125,7 +126,7 @@ class BonSortieSerializer(serializers.ModelSerializer):
             'id', 'reference_bs', 'document', 'date_bs', 'statut',
             'entite', 'entite_nom', 'utilisateur', 'utilisateur_nom', 'lignes',
         ]
-        read_only_fields = ['statut', 'utilisateur']  # statut géré par le workflow ; utilisateur = compte connecté
+        read_only_fields = ['statut', 'utilisateur']
 
 
 class DecisionLigneSerializer(serializers.Serializer):
@@ -166,7 +167,6 @@ class LivraisonInputSerializer(serializers.Serializer):
 class SortieInputSerializer(serializers.Serializer):
     bon_sortie = serializers.IntegerField()
     date_sortie = serializers.DateField()
-    # Optionnel : quantités réellement livrées par ligne (par défaut = quantités validées).
     livraisons = LivraisonInputSerializer(many=True, required=False)
 
 
@@ -175,12 +175,15 @@ class MouvementSerializer(serializers.ModelSerializer):
     entite_nom = serializers.CharField(source='entite.nom_entite', read_only=True, default=None)
     type_article_nom = serializers.CharField(source='type_article.nom_type_article', read_only=True, default=None)
     utilisateur_nom = serializers.CharField(source='utilisateur.username', read_only=True, default=None)
+    utilisateur_details = serializers.SerializerMethodField()
 
     class Meta:
         model = Mouvement
         fields = [
-            'id', 'type_mouvement', 'article', 'type_article', 'type_article_nom', 
-            'quantite', 'cible', 'utilisateur', 'utilisateur_nom', 'entite', 'entite_nom', 'date_mouvement',
+            'id', 'type_mouvement', 'article', 'type_article', 'type_article_nom',
+            'quantite', 'cible', 'utilisateur', 'utilisateur_nom',
+            'utilisateur_nom_saisi', 'utilisateur_role_saisi', 'utilisateur_details',
+            'operation_ref', 'entite', 'entite_nom', 'date_mouvement',
         ]
         read_only_fields = fields
 
@@ -188,3 +191,23 @@ class MouvementSerializer(serializers.ModelSerializer):
         if obj.article:
             return f"Article {obj.article.ref_article}"
         return f"{obj.quantite} x {obj.type_article}"
+
+    def get_utilisateur_details(self, obj):
+        if not obj.utilisateur:
+            return None
+        nom_saisi = obj.utilisateur_nom_saisi.strip()
+        role_saisi = obj.utilisateur_role_saisi.strip()
+        return {
+            'first_name': obj.utilisateur.first_name,
+            'last_name': obj.utilisateur.last_name,
+            'nom_complet': nom_saisi or obj.utilisateur.get_full_name() or obj.utilisateur.username,
+            'role': obj.utilisateur.role,
+            'role_libelle': role_saisi or obj.utilisateur.get_role_display(),
+        }
+
+
+class UtilisateurProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Utilisateur
+        fields = ['id', 'username', 'first_name', 'last_name', 'role']
+        read_only_fields = ['id', 'username', 'role']

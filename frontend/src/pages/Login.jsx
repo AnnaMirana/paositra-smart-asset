@@ -10,23 +10,36 @@ export default function Login() {
   const location = useLocation();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [nomAgent, setNomAgent] = useState(''); // 1. Nouvel état pour le nom
   const [erreur, setErreur] = useState('');
   const [occupe, setOccupe] = useState(false);
 
   if (user) return <Navigate to={location.state?.from || '/'} replace />;
 
-  async function envoyer(e) {
+
+async function envoyer(e) {
     e.preventDefault();
+
     setErreur('');
     setOccupe(true);
+
     try {
-      await login(username.trim(), password);
+        await login(
+            username.trim(),
+            password,
+            nomAgent.trim()
+        );
+
     } catch (err) {
-      setErreur(messageErreur(err));
+
+        setErreur(messageErreur(err));
+
     } finally {
-      setOccupe(false);
+
+        setOccupe(false);
+
     }
-  }
+}
 
   return (
     <div className="login-page">
@@ -35,9 +48,22 @@ export default function Login() {
         <h1>Connexion</h1>
         <form onSubmit={envoyer}>
           <Alert type="erreur">{erreur || erreurServeur}</Alert>
+          
+          {/* 3. Champ Nom de l'agent ajouté ici */}
+          <Field label="Nom / Prénom de l'agent">
+              <input
+                  type="text"
+                  value={nomAgent}
+                  onChange={(e) => setNomAgent(e.target.value)}
+                  placeholder="Ex: Jean Rakoto"
+                  required
+              />
+          </Field>
+
           <Field label="Identifiant">
             <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus required />
           </Field>
+          
           <Field label="Mot de passe">
             <input
               type="password"
@@ -47,6 +73,7 @@ export default function Login() {
               required
             />
           </Field>
+          
           <button type="submit" className="btn btn-primary" disabled={occupe}>
             {occupe ? 'Connexion…' : 'Se connecter'}
           </button>

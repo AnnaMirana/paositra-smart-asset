@@ -74,7 +74,7 @@ def stock_disponible_pour_autorisation(type_article: TypeArticle) -> int:
 # ENTRÉES
 # ---------------------------------------------------------------------------
 
-def enregistrer_ligne_entree(entree, type_article: TypeArticle, quantite: int, utilisateur):
+def enregistrer_ligne_entree(entree, type_article: TypeArticle, quantite: int, utilisateur, nom_agent=''):
     """
     - TypeArticle.quantite_stock augmente TOUJOURS de `quantite` (stock global du type).
     - Type individualisé : en plus, `quantite` Article distincts + un Mouvement 'entree' par article.
@@ -99,13 +99,25 @@ def enregistrer_ligne_entree(entree, type_article: TypeArticle, quantite: int, u
                     type_article=type_verrouille,
                     ligne_entree=ligne,
                 )
-                Mouvement.objects.create(type_mouvement='entree', article=article, utilisateur=utilisateur)
+                Mouvement.objects.create(
+                    type_mouvement='entree',
+                    article=article,
+                    utilisateur=utilisateur,
+                    utilisateur_nom_saisi=nom_agent or utilisateur.get_full_name() or utilisateur.username,
+                    utilisateur_role_saisi=utilisateur.get_role_display(),
+                    operation_ref=f"ENT-{entree.ref_entree}-L{ligne.id}",
+                )
                 articles_crees.append(article)
             return ligne, articles_crees
 
         Mouvement.objects.create(
-            type_mouvement='entree', type_article=type_verrouille,
-            quantite=quantite, utilisateur=utilisateur,
+            type_mouvement='entree',
+            type_article=type_verrouille,
+            quantite=quantite,
+            utilisateur=utilisateur,
+            utilisateur_nom_saisi=nom_agent or utilisateur.get_full_name() or utilisateur.username,
+            utilisateur_role_saisi=utilisateur.get_role_display(),
+            operation_ref=f"ENT-{entree.ref_entree}-L{ligne.id}",
         )
         return ligne, []
 
@@ -239,7 +251,7 @@ def valider_ligne(ligne, utilisateur, quantite, motif=''):
 # SORTIE PHYSIQUE (CAME)
 # ---------------------------------------------------------------------------
 
-def effectuer_sortie(bon_sortie, date_sortie, utilisateur, livraisons=None):
+def effectuer_sortie(bon_sortie, date_sortie, utilisateur, livraisons=None, nom_agent=''):
     """
     Sortie physique réalisée par le CAME, uniquement pour un BS VALIDE.
     `livraisons` : {id_ligne_bsortie: quantite_livree} ; par défaut, chaque ligne
@@ -323,12 +335,24 @@ def effectuer_sortie(bon_sortie, date_sortie, utilisateur, livraisons=None):
                     sortie.articles.add(*choisis)
                     for article in choisis:
                         Mouvement.objects.create(
-                            type_mouvement='sortie', article=article, utilisateur=utilisateur, entite=bs.entite,
+                            type_mouvement='sortie',
+                            article=article,
+                            utilisateur=utilisateur,
+                            entite=bs.entite,
+                            utilisateur_nom_saisi=nom_agent or utilisateur.get_full_name() or utilisateur.username,
+                            utilisateur_role_saisi=utilisateur.get_role_display(),
+                            operation_ref=sortie.ref_sortie,
                         )
                 else:
                     Mouvement.objects.create(
-                        type_mouvement='sortie', type_article=t, quantite=livree,
-                        utilisateur=utilisateur, entite=bs.entite,
+                        type_mouvement='sortie',
+                        type_article=t,
+                        quantite=livree,
+                        utilisateur=utilisateur,
+                        entite=bs.entite,
+                        utilisateur_nom_saisi=nom_agent or utilisateur.get_full_name() or utilisateur.username,
+                        utilisateur_role_saisi=utilisateur.get_role_display(),
+                        operation_ref=sortie.ref_sortie,
                     )
             ligne.etat_ligne = 'sortie'
             ligne.save(update_fields=['etat_ligne'])

@@ -1,67 +1,124 @@
-"""
-Authentification pour le frontend React (Mois 2).
-
-Principe : connexion par SESSION Django (cookie), la même que l'admin et l'API
-navigable. React n'a donc aucun jeton à stocker ; il envoie le cookie de session
-et l'en-tête X-CSRFToken (lu dans le cookie csrftoken) pour les requêtes qui
-modifient des données.
-
-  GET  /api/auth/me/      -> qui suis-je ? (profil + rôle) ; pose aussi le cookie CSRF
-  POST /api/auth/login/   -> {username, password}
-  POST /api/auth/logout/
-"""
-from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth import authenticate
+from django.contrib.auth import login as django_login
+from django.contrib.auth import logout as django_logout
 from django.views.decorators.csrf import ensure_csrf_cookie
-from django.views.decorators.csrf import csrf_exempt
+
 from rest_framework import status
-from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.decorators import (
+    api_view,
+    authentication_classes,
+    permission_classes,
+)
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 
-def _profil(user):
+def _role_libelle(user):
+    roles = {
+        'came1': 'Agent CAME',
+        'dsid1': 'Agent DSID',
+        'dca1': 'Agent DCA',
+        'auditeur1': 'Auditeur',
+        'admin': 'Administrateur',
+    }
+
+    return roles.get(user.username, getattr(user, 'role', 'Agent'))
+
+
+def _profil(user, request=None):
+    nom_saisi = None
+
+    if request:
+        nom_saisi = request.session.get('agent_nom_saisi')
+
+    if not nom_saisi:
+        nom_saisi = (
+            f"{user.first_name} {user.last_name}".strip()
+            or user.username
+        )
+
     return {
-        'authentifie': True,
         'id': user.id,
         'username': user.username,
-        'nom_complet': user.get_full_name() or user.username,
-        'role': user.role,
-        'role_libelle': user.get_role_display() if user.role else '',
-        'is_superuser': user.is_superuser,
+        'nom_complet': nom_saisi,
+        'role': getattr(user, 'role', ''),
+        'role_libelle': _role_libelle(user),
+        'entites': (
+            list(user.entites.values_list('id', flat=True))
+            if hasattr(user, 'entites')
+            else []
+        ),
+        'authentifie': True,
         'is_staff': user.is_staff,
-        'entites': list(user.entites.values_list('id', flat=True)),
+        'is_superuser': user.is_superuser,
     }
 
 
-@ensure_csrf_cookie
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def me(request):
-    if request.user.is_authenticated:
-        return Response(_profil(request.user))
-    return Response({'authentifie': False})
-
-
 @api_view(['POST'])
-@authentication_classes([])          # pas de vérification CSRF pour la connexion elle-même
+@authentication_classes([])
 @permission_classes([AllowAny])
+@ensure_csrf_cookie
 def login_view(request):
-    username = str(request.data.get('username', '')).strip()
-    password = str(request.data.get('password', ''))
-    # authenticate() refuse aussi les comptes désactivés (actif=False -> is_active=False).
-    user = authenticate(request, username=username, password=password)
+
+    username = str(request.data.get('username') or '').strip()
+    password = str(request.data.get('password') or '')
+    nom_agent = str(request.data.get('nom_agent') or '').strip()
+
+    # Le nom déclaré est obligatoire.
+    if not nom_agent:
+        return Response(
+            {
+                'erreur': (
+                    "Le nom et prénom de l'agent sont "
+                    "obligatoires pour la traçabilité."
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    user = authenticate(
+        request,
+        username=username,
+        password=password
+    )
+
     if user is None:
         return Response(
-            {'erreur': 'Identifiant ou mot de passe incorrect, ou compte désactivé.'},
-            status=status.HTTP_400_BAD_REQUEST,
+            {
+                'erreur': (
+                    'Identifiant ou mot de passe incorrect, '
+                    'ou compte désactivé.'
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST
         )
-    login(request, user)
-    return Response(_profil(user))
+
+    # Ouverture de la session Django.
+    django_login(request, user)
+
+    # Conservation de l'identité déclarée dans cette session.
+    request.session['agent_nom_saisi'] = nom_agent
+
+    return Response(_profil(user, request))
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+@ensure_csrf_cookie
+def me(request):
+
+    if not request.user.is_authenticated:
+        return Response({'authentifie': False})
+
+    return Response(_profil(request.user, request))
 
 
 @api_view(['POST'])
-@authentication_classes([])  # Désactive la vérification CSRF / Session de DRF
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def logout_view(request):
-    logout(request)
-    return Response({'authentifie': False})
+
+    request.session.pop('agent_nom_saisi', None)
+
+    django_logout(request)
+
+    return Response({'deconnecte': True})
