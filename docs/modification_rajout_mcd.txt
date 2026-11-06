@@ -1,0 +1,61 @@
+caracteristique car chaque ordi peut avoir la leurs
+direction fournid ref par article 
+qrcode pas obligatoire pour consommable(ex encre)
+si on a le temps : demande traveaux direction retour , reparation ,état(arrivé,encoursreparation,reparer) remise, date ,
+
+Bonne nouvelle : comme on n'a pas encore lancé `makemigrations` ni `migrate` pour de vrais modèles métier (seulement le `migrate` initial des tables internes Django), c'est le **meilleur moment possible** pour faire ce choix — ça sera beaucoup plus douloureux à changer plus tard. Mais il y a une vraie conséquence technique à t'expliquer avant qu'on avance.
+
+## 1. Les deux relations demandées — proposition de cardinalités
+
+En reprenant la logique déjà utilisée pour `INTERVIENT` (traçabilité obligatoire), je propose :
+
+```
+UTILISATEUR (0,n) ↔ (1,1) ENTREE
+UTILISATEUR (0,n) ↔ (1,1) MOUVEMENT
+```
+
+C'est-à-dire : un utilisateur peut enregistrer plusieurs entrées/mouvements, mais **chaque entrée et chaque mouvement doit obligatoirement avoir un utilisateur** (pas de `NULL` possible) — cohérent avec ton exigence de traçabilité complète.
+
+En Django, ça se traduira (quand on créera les modèles `Entree` et `Mouvement`, pas encore aujourd'hui) par un champ comme celui-ci sur chacun :
+
+```python
+utilisateur = models.ForeignKey(
+    Utilisateur,
+    on_delete=models.PROTECT,
+    related_name='entrees_enregistrees'  # ou 'mouvements_enregistres' pour Mouvement
+)
+```
+
+**Point important à valider avec toi** : `on_delete=models.PROTECT`. Ça veut dire que Django **refusera** de supprimer un compte `Utilisateur` tant qu'il existe encore des `Entree` ou `Mouvement` liés à lui. Je le propose volontairement, parce que c'est exactement cohérent avec la règle "jamais de suppression" déjà validée dans le projet — si on supprimait un utilisateur avec `on_delete=CASCADE` (le choix le plus courant par défaut), ça effacerait aussi tout son historique d'opérations, ce qui casserait la traçabilité. Dis-moi si tu valides `PROTECT`, sinon on discute d'une autre option (ex. désactiver un compte via `actif=False` plutôt que le supprimer, ce qui rend d'ailleurs cette question presque théorique en pratique).
+
+## 2. La vraie conséquence à régler avant de continuer
+
+Tout à l'heure, `python manage.py migrate` a déjà créé les tables Django par défaut, y compris `auth_user` — c'est-à-dire que Django a déjà mis en place le système d'utilisateur **standard**, pas encore notre `Utilisateur` personnalisé.
+
+Django a une règle stricte : **`AUTH_USER_MODEL` (le réglage qui dit "utilise ce modèle-ci comme utilisateur") doit être défini AVANT la toute première migration**, pas après. Si on ajoute notre modèle `Utilisateur` maintenant sans repartir de zéro, Django va entrer en conflit avec les tables déjà créées pour l'ancien système.
+
+**PROPOSITION — À VALIDER** : comme la base ne contient encore **aucune donnée réelle** (juste des tables vides créées il y a quelques minutes), la solution la plus simple et la plus propre est de **réinitialiser la base de données maintenant**, pendant qu'il n'y a rien à perdre. Dans 2 semaines, avec de vraies données dedans, ce serait beaucoup plus compliqué.
+
+Si tu valides, voici ce qu'on ferait (je ne lance rien avant ta confirmation) :
+
+```powershell
+psql -U postgres
+```
+```sql
+DROP DATABASE paositra_db;
+CREATE DATABASE paositra_db;
+ALTER DATABASE paositra_db OWNER TO paositra_user;
+\q
+```
+
+Puis, côté Django, on supprimerait aussi les fichiers de migration déjà générés (aucun n'a encore été appliqué pour `inventaire`, donc rien de grave) :
+
+```powershell
+Remove-Item inventaire\migrations\0*.py -ErrorAction SilentlyContinue
+```
+
+## Confirme-moi ces deux points avant qu'on continue :
+1. `on_delete=models.PROTECT` sur les deux relations — d'accord ?
+2. Je réinitialise la base maintenant (rien à perdre, juste des tables vides) — d'accord ?
+
+Une fois ces deux réponses obtenues, je te montre le code complet du modèle `Utilisateur` personnalisé (avec `role`, `actif`, `nom`, et le système de mot de passe sécurisé de Django déjà intégré automatiquement), le réglage `AUTH_USER_MODEL` dans `settings.py`, et on relance proprement `makemigrations` pour tout (`Categorie`, `Fournisseur`, `Direction`, `Utilisateur`) en une seule fois.
