@@ -58,7 +58,7 @@ export default function Mouvements() {
       'Nom non renseigné';
 
     setSelectedAgent({
-      username: m.utilisateur_nom,
+      username: '',
       nomComplet,
       role: details.role_libelle || m.utilisateur_role_saisi || details.role || 'Agent',
     });
@@ -180,8 +180,8 @@ export default function Mouvements() {
               Détails de l'Agent
             </h3>
             <div style={{ fontSize: '0.95rem', lineHeight: '1.6', color: '#334155', marginBottom: '20px' }}>
-              <p><strong>Identifiant technique :</strong> {selectedAgent.username}</p>
-              <p><strong>Nom & Prénom déclarés :</strong> {selectedAgent.nomComplet}</p>
+              
+              <p><strong>Nom du compte :</strong> {selectedAgent.nomComplet}</p>
               <p><strong>Rôle :</strong> {selectedAgent.role}</p>
             </div>
             <div style={{ textAlign: 'right' }}>

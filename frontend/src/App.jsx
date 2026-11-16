@@ -8,6 +8,7 @@ import BonsSortie from './pages/BonsSortie';
 import Dashboard from './pages/Dashboard';
 import Entrees from './pages/Entrees';
 import Login from './pages/Login';
+import ChangerMotDePasse from './pages/ChangerMotDePasse';
 import Mouvements from './pages/Mouvements';
 import Referentiels from './pages/Referentiels';
 import Stock from './pages/Stock';
@@ -22,6 +23,8 @@ function Contenu() {
 
   return (
     <Routes>
+      <Route path="/changer-mot-de-passe" element={user ? <ChangerMotDePasse /> : <Navigate to="/login" replace />} />
+
       <Route
         path="/login"
         element={user ? <Navigate to="/" replace /> : <Login />}
@@ -29,7 +32,7 @@ function Contenu() {
 
       <Route
         path="/"
-        element={user ? <Layout /> : <Navigate to="/login" replace />}
+        element={user ? (user.doit_changer_mot_de_passe ? <Navigate to="/changer-mot-de-passe" replace /> : <Layout />) : <Navigate to="/login" replace />}
       >
       
         <Route index element={<Dashboard />} />

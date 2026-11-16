@@ -28,7 +28,10 @@ class BaseTest(TestCase):
         self.root = Utilisateur.objects.create_superuser('root', 'r@test.mg', 'x')
         self.demandeur = mk('dem', password='x', role='demandeur')
         self.dsid = mk('dsid', password='x', role='agent_dsid')
-        self.dca = mk('dca', password='x', role='agent_validation')
+        self.autorite = mk('directeur-dsid', password='x', role='directeur_dsid')
+        self.dg = mk('dg', password='x', role='dg')
+        self.dga = mk('dga', password='x', role='dga')
+        self.dca = mk('dca', password='x', role='agent_validation')  # ancien rôle conservé, sans action de validation
         self.came = mk('came', password='x', role='agent_came')
         self.user = self.dsid  # utilisateur "neutre" pour les entrées
 
@@ -66,16 +69,15 @@ class BaseTest(TestCase):
             LigneBSortie.objects.create(bon_sortie=bs, type_article=t, quantite_demandee=q)
         if soumettre:
             services.soumettre_bon_sortie(bs, self.demandeur)
+            services.choisir_autorite(bs, self.dsid, 'directeur_dsid')
             bs.refresh_from_db()
         return bs
 
     def _valide(self, lignes):
-        """Parcours complet : soumission, autorisation DSID, validation DCA (quantités = demandes)."""
+        """Parcours complet : soumission, choix DSID, décision Directeur DSID."""
         bs = self._bs(lignes, soumettre=True)
         for l in bs.lignes.all():
-            services.autoriser_ligne(l, self.dsid, l.quantite_demandee)
-        for l in bs.lignes.all():
-            services.valider_ligne(l, self.dca, l.quantite_demandee)
+            services.autoriser_ligne(l, self.autorite, l.quantite_demandee)
         bs.refresh_from_db()
         return bs
 
@@ -130,7 +132,7 @@ class SocleMois1Tests(BaseTest):
         bs = self._bs([(self.type_encre, 999)], soumettre=True)
         ligne = bs.lignes.get()
         with self.assertRaises(ValidationError):
-            services.autoriser_ligne(ligne, self.dsid, 999)
+            services.autoriser_ligne(ligne, self.autorite, 999)
         ligne.refresh_from_db()
         self.assertEqual(ligne.etat_ligne, 'demandee', "la ligne ne doit pas avoir bougé")
         self.assertEqual(Intervient.objects.count(), 0, "aucune décision ne doit être enregistrée")
@@ -141,7 +143,7 @@ class SocleMois1Tests(BaseTest):
         self._entrer(self.type_ordi, 2)
         bs = self._bs([(self.type_ordi, 5)], soumettre=True)
         with self.assertRaises(ValidationError):
-            services.autoriser_ligne(bs.lignes.get(), self.dsid, 5)
+            services.autoriser_ligne(bs.lignes.get(), self.autorite, 5)
         self.type_ordi.refresh_from_db()
         self.assertEqual(self.type_ordi.quantite_stock, 2)
 
@@ -213,10 +215,18 @@ class ModeleMois2Tests(BaseTest):
         autre = Categorie.objects.create(nom_categorie='Mobilier')
         TypeArticle.objects.create(nom_type_article='Ordinateur portable', categorie=autre)  # autorisé
 
-    def test_fournisseur_obligatoire_dans_entree(self):
+    def test_fournisseur_facultatif_pour_don_et_obligatoire_pour_achat(self):
+        don = Entree.objects.create(
+            date_entree=date.today(), ref_entree='DON-SANS-F', origine='don',
+            utilisateur=self.user,
+        )
+        self.assertIsNone(don.fournisseur)
+
         with self.assertRaises(IntegrityError), transaction.atomic():
-            Entree.objects.create(date_entree=date.today(), ref_entree='SANS-F', origine='don',
-                                  utilisateur=self.user)
+            Entree.objects.create(
+                date_entree=date.today(), ref_entree='ACHAT-SANS-F', origine='achat',
+                utilisateur=self.user,
+            )
 
     def test_marque_sur_type_pas_sur_article(self):
         _, articles = self._entrer(self.type_ordi, 1)
@@ -262,7 +272,7 @@ class WorkflowTests(BaseTest):
         self.assertEqual(bs.statut, 'brouillon')
         services.soumettre_bon_sortie(bs, self.demandeur)
         bs.refresh_from_db()
-        self.assertEqual(bs.statut, 'en_attente_autorisation')
+        self.assertEqual(bs.statut, 'en_attente_choix_autorite')
         with self.assertRaises(ValidationError):  # déjà soumis
             services.soumettre_bon_sortie(bs, self.demandeur)
 
@@ -272,32 +282,56 @@ class WorkflowTests(BaseTest):
         with self.assertRaises(PermissionDenied):
             services.soumettre_bon_sortie(bs, autre)
 
+    def test_choix_autorite_est_trace_et_non_modifiable(self):
+        bs = self._bs([(self.type_encre, 2)])
+        services.soumettre_bon_sortie(bs, self.demandeur)
+        with self.assertRaises(PermissionDenied):
+            services.choisir_autorite(bs, self.demandeur, 'dg')
+        services.choisir_autorite(bs, self.dsid, 'dg')
+        bs.refresh_from_db()
+        self.assertEqual(bs.autorite_choisie, 'dg')
+        self.assertEqual(bs.autorite_choisie_par, self.dsid)
+        self.assertIsNotNone(bs.autorite_choisie_le)
+        with self.assertRaises(ValidationError):
+            services.choisir_autorite(bs, self.dsid, 'dga')
+
+    def test_seule_autorite_choisie_peut_decider(self):
+        self._entrer(self.type_encre, 10)
+        bs = self._bs([(self.type_encre, 3)])
+        services.soumettre_bon_sortie(bs, self.demandeur)
+        services.choisir_autorite(bs, self.dsid, 'dg')
+        ligne = bs.lignes.get()
+        with self.assertRaises(PermissionDenied):
+            services.autoriser_ligne(ligne, self.autorite, 3)
+        services.autoriser_ligne(ligne, self.dg, 3)
+        self.assertEqual(Intervient.objects.get(ligne_bsortie=ligne).utilisateur, self.dg)
+
     def test_autorisation_partielle_exige_un_motif_et_est_tracee(self):
         self._entrer(self.type_encre, 20)
         bs = self._bs([(self.type_encre, 10)], soumettre=True)
         ligne = bs.lignes.get()
         with self.assertRaises(ValidationError):
-            services.autoriser_ligne(ligne, self.dsid, 7)  # sans motif
-        services.autoriser_ligne(ligne, self.dsid, 7, motif='stock limité')
+            services.autoriser_ligne(ligne, self.autorite, 7)  # sans motif
+        services.autoriser_ligne(ligne, self.autorite, 7, motif='stock limité')
         ligne.refresh_from_db()
-        self.assertEqual((ligne.quantite_autorisee, ligne.etat_ligne), (7, 'autorisee'))
+        self.assertEqual((ligne.quantite_autorisee, ligne.quantite_validee, ligne.etat_ligne), (7, 7, 'validee'))
         iv = Intervient.objects.get(ligne_bsortie=ligne)
         self.assertEqual((iv.role_intervention, iv.quantite_decidee, iv.motif, iv.utilisateur),
-                         ('autorisation', 7, 'stock limité', self.dsid))
+                         ('autorisation', 7, 'stock limité', self.autorite))
         self.assertIsNotNone(iv.date_intervention)
 
     def test_autorisation_ne_depasse_pas_la_demande(self):
         self._entrer(self.type_encre, 20)
         bs = self._bs([(self.type_encre, 5)], soumettre=True)
         with self.assertRaises(ValidationError):
-            services.autoriser_ligne(bs.lignes.get(), self.dsid, 6, motif='trop')
+            services.autoriser_ligne(bs.lignes.get(), self.autorite, 6, motif='trop')
 
     def test_refus_ligne_quantite_zero_avec_motif(self):
         bs = self._bs([(self.type_encre, 5)], soumettre=True)
         ligne = bs.lignes.get()
         with self.assertRaises(ValidationError):
-            services.autoriser_ligne(ligne, self.dsid, 0)  # refus sans motif
-        services.autoriser_ligne(ligne, self.dsid, 0, motif='non justifié')
+            services.autoriser_ligne(ligne, self.autorite, 0)  # refus sans motif
+        services.autoriser_ligne(ligne, self.autorite, 0, motif='non justifié')
         ligne.refresh_from_db()
         self.assertEqual((ligne.etat_ligne, ligne.quantite_autorisee), ('refusee', 0))
         self.assertEqual(Intervient.objects.get().quantite_decidee, 0)
@@ -305,7 +339,7 @@ class WorkflowTests(BaseTest):
     def test_toutes_lignes_refusees_donne_bs_refuse(self):
         bs = self._bs([(self.type_encre, 5), (self.type_ordi, 2)], soumettre=True)
         for l in bs.lignes.all():
-            services.autoriser_ligne(l, self.dsid, 0, motif='refus')
+            services.autoriser_ligne(l, self.autorite, 0, motif='refus')
         bs.refresh_from_db()
         self.assertEqual(bs.statut, 'refuse')
 
@@ -314,83 +348,78 @@ class WorkflowTests(BaseTest):
         self._entrer(self.type_ordi, 5)
         bs = self._bs([(self.type_encre, 5), (self.type_ordi, 2)], soumettre=True)
         l_encre, l_ordi = bs.lignes.order_by('id')
-        services.autoriser_ligne(l_encre, self.dsid, 0, motif='refus')
+        services.autoriser_ligne(l_encre, self.autorite, 0, motif='refus')
         bs.refresh_from_db()
-        self.assertEqual(bs.statut, 'en_attente_autorisation', "il reste une ligne à traiter")
-        services.autoriser_ligne(l_ordi, self.dsid, 2)
+        self.assertEqual(bs.statut, 'en_attente_autorisation', "il reste une ligne à traiter par l'autorité")
+        services.autoriser_ligne(l_ordi, self.autorite, 2)
         bs.refresh_from_db()
-        self.assertEqual(bs.statut, 'en_attente_validation')
+        self.assertEqual(bs.statut, 'valide')
 
-    def test_ligne_refusee_par_dsid_pas_proposee_au_dca(self):
+    def test_ligne_refusee_par_autorite_ne_bloque_pas_les_autres(self):
         self._entrer(self.type_encre, 20)
         self._entrer(self.type_ordi, 5)
         bs = self._bs([(self.type_encre, 5), (self.type_ordi, 2)], soumettre=True)
         l_encre, l_ordi = bs.lignes.order_by('id')
-        services.autoriser_ligne(l_encre, self.dsid, 0, motif='refus')
-        services.autoriser_ligne(l_ordi, self.dsid, 2)
-        with self.assertRaises(ValidationError):
-            services.valider_ligne(l_encre, self.dca, 5)
-        a_valider = list(LigneBSortie.objects.filter(bon_sortie=bs, etat_ligne='autorisee'))
-        self.assertEqual(a_valider, [l_ordi])
-
-    def test_validation_dca_modifie_quantite_avec_motif(self):
+        services.autoriser_ligne(l_encre, self.autorite, 0, motif='refus')
+        services.autoriser_ligne(l_ordi, self.autorite, 2)
+        bs.refresh_from_db()
+        l_encre.refresh_from_db()
+        l_ordi.refresh_from_db()
+        self.assertEqual(bs.statut, 'valide')
+        self.assertEqual(l_encre.etat_ligne, 'refusee')
+        self.assertEqual(l_ordi.etat_ligne, 'validee')
+    def test_autorite_choisie_decide_quantite_partielle_avec_motif(self):
         self._entrer(self.type_encre, 20)
         bs = self._bs([(self.type_encre, 10)], soumettre=True)
         ligne = bs.lignes.get()
-        services.autoriser_ligne(ligne, self.dsid, 10)
         with self.assertRaises(ValidationError):
-            services.valider_ligne(ligne, self.dca, 6)  # sans motif
-        with self.assertRaises(ValidationError):
-            services.valider_ligne(ligne, self.dca, 11, motif='plus')  # plus que l'autorisé
-        services.valider_ligne(ligne, self.dca, 6, motif='budget')
+            services.autoriser_ligne(ligne, self.autorite, 6)
+        services.autoriser_ligne(ligne, self.autorite, 6, motif='budget')
         ligne.refresh_from_db()
-        self.assertEqual((ligne.quantite_validee, ligne.etat_ligne), (6, 'validee'))
+        self.assertEqual((ligne.quantite_autorisee, ligne.quantite_validee, ligne.etat_ligne), (6, 6, 'validee'))
         bs.refresh_from_db()
         self.assertEqual(bs.statut, 'valide')
-        self.assertEqual(Intervient.objects.filter(role_intervention='validation').get().quantite_decidee, 6)
-
-    def test_dca_rejette_tout_donne_bs_refuse(self):
+        self.assertEqual(Intervient.objects.filter(role_intervention='autorisation').get().quantite_decidee, 6)
+    def test_autorite_refuse_tout_donne_bs_refuse(self):
         self._entrer(self.type_encre, 20)
         bs = self._bs([(self.type_encre, 5)], soumettre=True)
         ligne = bs.lignes.get()
-        services.autoriser_ligne(ligne, self.dsid, 5)
-        services.valider_ligne(ligne, self.dca, 0, motif='rejet')
+        services.autoriser_ligne(ligne, self.autorite, 0, motif='refus')
         ligne.refresh_from_db()
         bs.refresh_from_db()
-        self.assertEqual(ligne.etat_ligne, 'rejetee')
+        self.assertEqual(ligne.etat_ligne, 'refusee')
         self.assertEqual(bs.statut, 'refuse')
-
-    def test_ligne_rejetee_ne_bloque_pas_la_sortie_des_autres(self):
+    def test_ligne_refusee_ne_bloque_pas_la_sortie_des_autres(self):
         self._entrer(self.type_encre, 20)
         self._entrer(self.type_ordi, 5)
         bs = self._bs([(self.type_encre, 5), (self.type_ordi, 2)], soumettre=True)
         l_encre, l_ordi = bs.lignes.order_by('id')
-        services.autoriser_ligne(l_encre, self.dsid, 5)
-        services.autoriser_ligne(l_ordi, self.dsid, 2)
-        services.valider_ligne(l_encre, self.dca, 0, motif='rejet')
-        services.valider_ligne(l_ordi, self.dca, 2)
+        services.autoriser_ligne(l_encre, self.autorite, 0, motif='refus')
+        services.autoriser_ligne(l_ordi, self.autorite, 2)
         bs.refresh_from_db()
         self.assertEqual(bs.statut, 'valide')
         sortie = self._sortir(bs)
         self.assertEqual(sortie.quantite, 2)
         self.assertEqual(sortie.lignes.count(), 1)
         l_encre.refresh_from_db()
-        self.assertEqual(l_encre.etat_ligne, 'rejetee', "reste dans l'historique")
+        self.assertEqual(l_encre.etat_ligne, 'refusee', "reste dans l'historique")
         self.type_encre.refresh_from_db()
-        self.assertEqual(self.type_encre.quantite_stock, 20, "la ligne rejetée n'a rien sorti")
-
+        self.assertEqual(self.type_encre.quantite_stock, 20, "la ligne refusée n'a rien sorti")
     def test_decisions_hors_etape_refusees(self):
         self._entrer(self.type_encre, 20)
         bs = self._bs([(self.type_encre, 5)])  # brouillon
         ligne = bs.lignes.get()
         with self.assertRaises(ValidationError):
-            services.autoriser_ligne(ligne, self.dsid, 5)  # pas encore soumis
+            services.autoriser_ligne(ligne, self.autorite, 5)  # pas encore soumis
         services.soumettre_bon_sortie(bs, self.demandeur)
         with self.assertRaises(ValidationError):
-            services.valider_ligne(ligne, self.dca, 5)  # pas encore autorisé
-        services.autoriser_ligne(ligne, self.dsid, 5)
+            services.autoriser_ligne(ligne, self.autorite, 5)  # DSID n'a pas encore choisi
+        services.choisir_autorite(bs, self.dsid, 'directeur_dsid')
+        with self.assertRaises(PermissionDenied):
+            services.valider_ligne(ligne, self.dca, 5)  # étape DCA retirée
+        services.autoriser_ligne(ligne, self.autorite, 5)
         with self.assertRaises(ValidationError):
-            services.autoriser_ligne(ligne, self.dsid, 5)  # déjà traitée
+            services.autoriser_ligne(ligne, self.autorite, 5)  # déjà traitée
 
     def test_roles_respectes(self):
         self._entrer(self.type_encre, 20)
@@ -400,20 +429,19 @@ class WorkflowTests(BaseTest):
             services.autoriser_ligne(ligne, self.demandeur, 5)
         with self.assertRaises(PermissionDenied):
             services.autoriser_ligne(ligne, self.dca, 5)
-        services.autoriser_ligne(ligne, self.dsid, 5)
+        services.autoriser_ligne(ligne, self.autorite, 5)
         with self.assertRaises(PermissionDenied):
-            services.valider_ligne(ligne, self.dsid, 5)
-        services.valider_ligne(ligne, self.root, 5)  # superuser accepté
+            services.valider_ligne(ligne, self.dca, 5)  # étape DCA retirée
         with self.assertRaises(PermissionDenied):
             services.effectuer_sortie(bs, date.today(), self.dca)
         self._sortir(bs)
 
     def test_compte_desactive_ne_peut_pas_agir(self):
-        self.dsid.actif = False
-        self.dsid.save()
+        self.autorite.actif = False
+        self.autorite.save()
         bs = self._bs([(self.type_encre, 5)], soumettre=True)
         with self.assertRaises(PermissionDenied):
-            services.autoriser_ligne(bs.lignes.get(), self.dsid, 5)
+            services.autoriser_ligne(bs.lignes.get(), self.autorite, 5)
 
 
 # =====================================================================
@@ -425,7 +453,7 @@ class ReservationTests(BaseTest):
         """Stock 20 ; BS1 autorisé 10 (pas sorti) -> réservé 10, disponible 10 ; BS2 de 15 bloqué."""
         self._entrer(self.type_encre, 20)
         bs1 = self._bs([(self.type_encre, 10)], soumettre=True)
-        services.autoriser_ligne(bs1.lignes.get(), self.dsid, 10)
+        services.autoriser_ligne(bs1.lignes.get(), self.autorite, 10)
         self.type_encre.refresh_from_db()
         self.assertEqual(self.type_encre.quantite_stock, 20, "l'autorisation ne diminue pas le stock physique")
         self.assertEqual(services.stock_reserve(self.type_encre), 10)
@@ -433,35 +461,23 @@ class ReservationTests(BaseTest):
 
         bs2 = self._bs([(self.type_encre, 15)], soumettre=True)
         with self.assertRaises(ValidationError):
-            services.autoriser_ligne(bs2.lignes.get(), self.dsid, 15)
-        services.autoriser_ligne(bs2.lignes.get(), self.dsid, 10, motif='stock réservé par un autre BS')
+            services.autoriser_ligne(bs2.lignes.get(), self.autorite, 15)
+        services.autoriser_ligne(bs2.lignes.get(), self.autorite, 10, motif='stock réservé par un autre BS')
         self.assertEqual(services.stock_disponible_pour_autorisation(self.type_encre), 0)
 
-    def test_dca_diminue_la_quantite_la_reservation_suit(self):
+    def test_decision_partielle_reserve_directement_la_quantite_decidee(self):
         self._entrer(self.type_encre, 20)
         bs = self._bs([(self.type_encre, 10)], soumettre=True)
         ligne = bs.lignes.get()
-        services.autoriser_ligne(ligne, self.dsid, 10)
-        self.assertEqual(services.stock_reserve(self.type_encre), 10)
-        services.valider_ligne(ligne, self.dca, 6, motif='budget')
-        self.assertEqual(services.stock_reserve(self.type_encre), 6, "réservation passée de 10 à 6")
+        services.autoriser_ligne(ligne, self.autorite, 6, motif='budget')
+        self.assertEqual(services.stock_reserve(self.type_encre), 6)
         self.assertEqual(services.stock_disponible_pour_autorisation(self.type_encre), 14)
-
-    def test_rejet_libere_la_reservation(self):
-        self._entrer(self.type_encre, 20)
-        bs = self._bs([(self.type_encre, 10)], soumettre=True)
-        ligne = bs.lignes.get()
-        services.autoriser_ligne(ligne, self.dsid, 10)
-        services.valider_ligne(ligne, self.dca, 0, motif='rejet')
-        self.assertEqual(services.stock_reserve(self.type_encre), 0)
-        self.assertEqual(services.stock_disponible_pour_autorisation(self.type_encre), 20)
-
     def test_refus_ne_reserve_rien(self):
         self._entrer(self.type_encre, 20)
         bs = self._bs([(self.type_encre, 10)], soumettre=True)
-        services.autoriser_ligne(bs.lignes.get(), self.dsid, 0, motif='refus')
+        services.autoriser_ligne(bs.lignes.get(), self.autorite, 0, motif='refus')
         self.assertEqual(services.stock_reserve(self.type_encre), 0)
-
+        self.assertEqual(services.stock_disponible_pour_autorisation(self.type_encre), 20)
     def test_sortie_reelle_diminue_le_stock_et_libere_la_reservation(self):
         self._entrer(self.type_encre, 20)
         bs = self._valide([(self.type_encre, 10)])
@@ -475,10 +491,10 @@ class ReservationTests(BaseTest):
     def test_reservation_individualise_aussi(self):
         self._entrer(self.type_ordi, 5)
         bs1 = self._bs([(self.type_ordi, 4)], soumettre=True)
-        services.autoriser_ligne(bs1.lignes.get(), self.dsid, 4)
+        services.autoriser_ligne(bs1.lignes.get(), self.autorite, 4)
         bs2 = self._bs([(self.type_ordi, 2)], soumettre=True)
         with self.assertRaises(ValidationError):
-            services.autoriser_ligne(bs2.lignes.get(), self.dsid, 2)
+            services.autoriser_ligne(bs2.lignes.get(), self.autorite, 2)
 
 
 # =====================================================================
@@ -486,34 +502,29 @@ class ReservationTests(BaseTest):
 # =====================================================================
 class SortieTests(BaseTest):
 
-    def test_sortie_impossible_tant_que_le_dca_n_a_pas_traite_toutes_les_lignes(self):
-        """Une ligne déjà validée ne peut pas sortir tant que le DCA n'a pas fini d'examiner le BS."""
+    def test_sortie_impossible_tant_que_l_autorite_n_a_pas_traite_toutes_les_lignes(self):
         self._entrer(self.type_encre, 20)
         self._entrer(self.type_ordi, 5)
         bs = self._bs([(self.type_encre, 5), (self.type_ordi, 2)], soumettre=True)
         l_encre, l_ordi = bs.lignes.order_by('id')
-        services.autoriser_ligne(l_encre, self.dsid, 5)
-        services.autoriser_ligne(l_ordi, self.dsid, 2)
-        services.valider_ligne(l_encre, self.dca, 5)      # une seule ligne validée sur deux
+        services.autoriser_ligne(l_encre, self.autorite, 5)
         bs.refresh_from_db()
-        self.assertEqual(bs.statut, 'en_attente_validation')
+        self.assertEqual(bs.statut, 'en_attente_autorisation')
         with self.assertRaises(ValidationError):
             self._sortir(bs)
         self.assertFalse(Sortie.objects.exists())
-        self.type_encre.refresh_from_db()
-        self.assertEqual(self.type_encre.quantite_stock, 20)
-        services.valider_ligne(l_ordi, self.dca, 2)       # le DCA termine : la sortie devient possible
+        services.autoriser_ligne(l_ordi, self.autorite, 2)
         bs.refresh_from_db()
+        self.assertEqual(bs.statut, 'valide')
         self._sortir(bs)
-
-    def test_sortie_impossible_avant_validation(self):
+    def test_sortie_impossible_avant_decision_autorite(self):
         self._entrer(self.type_encre, 20)
-        for etat in ('brouillon', 'en_attente_autorisation', 'en_attente_validation'):
+        for etat in ('brouillon', 'en_attente_choix_autorite', 'en_attente_autorisation'):
             bs = self._bs([(self.type_encre, 5)])
             if etat != 'brouillon':
                 services.soumettre_bon_sortie(bs, self.demandeur)
-            if etat == 'en_attente_validation':
-                services.autoriser_ligne(bs.lignes.get(), self.dsid, 5)
+            if etat == 'en_attente_autorisation':
+                services.choisir_autorite(bs, self.dsid, 'directeur_dsid')
             bs.refresh_from_db()
             self.assertEqual(bs.statut, etat)
             with self.assertRaises(ValidationError):
@@ -521,7 +532,6 @@ class SortieTests(BaseTest):
         self.type_encre.refresh_from_db()
         self.assertEqual(self.type_encre.quantite_stock, 20)
         self.assertEqual(Sortie.objects.count(), 0)
-
     def test_quantites_reelles_livrees_et_sortie_quantite_somme(self):
         self._entrer(self.type_encre, 20)
         self._entrer(self.type_ordi, 5)
@@ -545,17 +555,15 @@ class SortieTests(BaseTest):
             self._sortir(bs, {bs.lignes.get().id: 6})
         self.assertFalse(Sortie.objects.exists())
 
-    def test_quantite_validee_est_utilisee_par_defaut(self):
+    def test_quantite_decidee_par_autorite_est_utilisee_par_defaut(self):
         self._entrer(self.type_encre, 20)
         bs = self._bs([(self.type_encre, 10)], soumettre=True)
         ligne = bs.lignes.get()
-        services.autoriser_ligne(ligne, self.dsid, 10)
-        services.valider_ligne(ligne, self.dca, 6, motif='budget')
+        services.autoriser_ligne(ligne, self.autorite, 6, motif='budget')
         sortie = self._sortir(bs)
         self.assertEqual(sortie.quantite, 6)
         self.type_encre.refresh_from_db()
         self.assertEqual(self.type_encre.quantite_stock, 14)
-
     def test_lien_ligne_sortie_vers_ligne_bsortie(self):
         self._entrer(self.type_encre, 20)
         bs = self._valide([(self.type_encre, 5)])
@@ -624,50 +632,48 @@ class ApiTests(BaseTest):
     def test_workflow_complet_via_api(self):
         self._entrer(self.type_encre, 20)
         self._entrer(self.type_ordi, 5)
-        dem, dsid, dca, came = (self._client(u) for u in (self.demandeur, self.dsid, self.dca, self.came))
+        dem = self._client(self.demandeur)
+        dsid = self._client(self.dsid)
+        autorite = self._client(self.autorite)
+        dca = self._client(self.dca)
+        came = self._client(self.came)
 
         r = dem.post('/api/bons-sortie/', {'reference_bs': 'BS-API', 'date_bs': '2026-10-10',
                                             'entite': self.entite.id, 'statut': 'valide'}, format='json')
         self.assertEqual(r.status_code, 201, r.content)
-        self.assertEqual(r.data['statut'], 'brouillon', "le statut envoyé par le client est ignoré")
-        self.assertEqual(r.data['utilisateur'], self.demandeur.id)
+        self.assertEqual(r.data['statut'], 'brouillon')
         bs_id = r.data['id']
-
         for t, q in ((self.type_encre, 10), (self.type_ordi, 2)):
             r = dem.post(f'/api/bons-sortie/{bs_id}/ajouter_ligne/', {'type_article': t.id, 'quantite_demandee': q}, format='json')
             self.assertEqual(r.status_code, 201, r.content)
 
         r = dem.post(f'/api/bons-sortie/{bs_id}/soumettre/')
-        self.assertEqual((r.status_code, r.data['statut']), (200, 'en_attente_autorisation'))
-        # plus de modification ni d'ajout de ligne après soumission
+        self.assertEqual((r.status_code, r.data['statut']), (200, 'en_attente_choix_autorite'))
         self.assertEqual(dem.post(f'/api/bons-sortie/{bs_id}/ajouter_ligne/',
                                   {'type_article': self.type_encre.id, 'quantite_demandee': 1}, format='json').status_code, 400)
         self.assertEqual(dem.patch(f'/api/bons-sortie/{bs_id}/', {'document': 'x'}, format='json').status_code, 400)
 
+        # Le DSID choisit une seule autorité pour tout le bon.
+        self.assertEqual(autorite.post(f'/api/bons-sortie/{bs_id}/choisir_autorite/', {'autorite': 'dg'}, format='json').status_code, 403)
+        r = dsid.post(f'/api/bons-sortie/{bs_id}/choisir_autorite/', {'autorite': 'directeur_dsid'}, format='json')
+        self.assertEqual((r.status_code, r.data['statut'], r.data['autorite_choisie']), (200, 'en_attente_autorisation', 'directeur_dsid'))
+        self.assertEqual(r.data['autorite_choisie_par'], self.dsid.id)
+        self.assertIsNotNone(r.data['autorite_choisie_le'])
+        self.assertEqual(dsid.post(f'/api/bons-sortie/{bs_id}/choisir_autorite/', {'autorite': 'dg'}, format='json').status_code, 400)
+
         l_encre, l_ordi = LigneBSortie.objects.filter(bon_sortie_id=bs_id).order_by('id')
-        # rôles : le demandeur ne peut pas autoriser
         self.assertEqual(dem.post(f'/api/lignes-bsortie/{l_encre.id}/autoriser/', {'quantite': 10}, format='json').status_code, 403)
-        # autorisation partielle sans motif -> 400
-        self.assertEqual(dsid.post(f'/api/lignes-bsortie/{l_encre.id}/autoriser/', {'quantite': 7}, format='json').status_code, 400)
-        r = dsid.post(f'/api/lignes-bsortie/{l_encre.id}/autoriser/', {'quantite': 7, 'motif': 'stock limité'}, format='json')
-        self.assertEqual((r.status_code, r.data['etat_ligne'], r.data['quantite_autorisee']), (200, 'autorisee', 7))
-        r = dsid.post(f'/api/lignes-bsortie/{l_ordi.id}/autoriser/', {'quantite': 0, 'motif': 'refus'}, format='json')
+        self.assertEqual(dca.post(f'/api/lignes-bsortie/{l_encre.id}/autoriser/', {'quantite': 10}, format='json').status_code, 404)
+        self.assertEqual(self._client(self.dg).post(f'/api/lignes-bsortie/{l_encre.id}/autoriser/', {'quantite': 7, 'motif': 'mauvaise autorité'}, format='json').status_code, 404)
+        self.assertEqual(autorite.post(f'/api/lignes-bsortie/{l_encre.id}/autoriser/', {'quantite': 7}, format='json').status_code, 400)
+        r = autorite.post(f'/api/lignes-bsortie/{l_encre.id}/autoriser/', {'quantite': 7, 'motif': 'stock limité'}, format='json')
+        self.assertEqual((r.status_code, r.data['etat_ligne'], r.data['quantite_validee']), (200, 'validee', 7))
+        r = autorite.post(f'/api/lignes-bsortie/{l_ordi.id}/autoriser/', {'quantite': 0, 'motif': 'refus'}, format='json')
         self.assertEqual(r.data['etat_ligne'], 'refusee')
+        self.assertEqual(autorite.get(f'/api/bons-sortie/{bs_id}/').data['statut'], 'valide')
 
-        # le DCA ne voit que les lignes à valider
-        a_valider = dca.get(f'/api/lignes-bsortie/?bon_sortie={bs_id}&etat_ligne=autorisee').data
-        a_valider = a_valider['results'] if isinstance(a_valider, dict) else a_valider
-        self.assertEqual([l['id'] for l in a_valider], [l_encre.id])
-        self.assertEqual(dca.post(f'/api/lignes-bsortie/{l_ordi.id}/valider/', {'quantite': 2}, format='json').status_code, 400)
-        r = dca.post(f'/api/lignes-bsortie/{l_encre.id}/valider/', {'quantite': 6, 'motif': 'budget'}, format='json')
-        self.assertEqual((r.status_code, r.data['etat_ligne'], r.data['quantite_validee']), (200, 'validee', 6))
-        self.assertEqual(dca.get(f'/api/bons-sortie/{bs_id}/').data['statut'], 'valide')
-
-        # stock : physique inchangé, réservé 6
         s = dsid.get(f'/api/types-article/{self.type_encre.id}/stock/').data
-        self.assertEqual((s['quantite_stock'], s['quantite_reservee'], s['stock_disponible_pour_autorisation']), (20, 6, 14))
-
-        # sortie : refusée tant que le rôle n'est pas CAME
+        self.assertEqual((s['quantite_stock'], s['quantite_reservee'], s['stock_disponible_pour_autorisation']), (20, 7, 13))
         corps = {'bon_sortie': bs_id, 'date_sortie': '2026-10-11', 'livraisons': json.dumps([{'ligne_bsortie': l_encre.id, 'quantite_livree': 5}])}
         refus = {**corps, 'document_livraison': SimpleUploadedFile('preuve.pdf', b'preuve', content_type='application/pdf')}
         self.assertEqual(dca.post('/api/sorties/effectuer/', refus, format='multipart').status_code, 403)
@@ -676,12 +682,12 @@ class ApiTests(BaseTest):
         self.assertEqual(r.data['quantite'], 5)
         s = came.get(f'/api/types-article/{self.type_encre.id}/stock/').data
         self.assertEqual((s['quantite_stock'], s['quantite_reservee']), (15, 0))
-        self.assertEqual(came.post('/api/sorties/effectuer/', {**corps, 'document_livraison': SimpleUploadedFile('preuve.pdf', b'preuve', content_type='application/pdf')}, format='multipart').status_code, 400)  # une seule fois
+        self.assertEqual(came.post('/api/sorties/effectuer/', {**corps, 'document_livraison': SimpleUploadedFile('preuve.pdf', b'preuve', content_type='application/pdf')}, format='multipart').status_code, 400)
 
-        # historique : décisions et mouvements traçables
         iv = came.get(f'/api/interventions/?ligne_bsortie={l_encre.id}').data
         iv = iv['results'] if isinstance(iv, dict) else iv
-        self.assertEqual(sorted(i['role_intervention'] for i in iv), ['autorisation', 'validation'])
+        self.assertEqual([i['role_intervention'] for i in iv], ['autorisation'])
+        self.assertEqual(iv[0]['utilisateur'], self.autorite.id)
         mv = came.get(f'/api/mouvements/?type_mouvement=sortie&entite={self.entite.id}').data
         mv = mv['results'] if isinstance(mv, dict) else mv
         self.assertEqual(len(mv), 1)

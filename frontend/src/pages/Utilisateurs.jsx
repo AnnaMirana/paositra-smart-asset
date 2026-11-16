@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+
 import {
   Alert,
   Card,
@@ -21,8 +22,7 @@ const ROLES = [
 ];
 
 const FORM_INITIAL = {
-  username: '',
-  password: '',
+  email: '',
   first_name: '',
   last_name: '',
   role: 'demandeur',
@@ -76,8 +76,13 @@ export default function Utilisateurs() {
     setErreur('');
     setMessage('');
 
-    if (form.role === 'demandeur' && !form.entite) {
-      setErreur('Sélectionnez une entité pour ce compte Demandeur.');
+    if (
+      form.role === 'demandeur'
+      && !form.entite
+    ) {
+      setErreur(
+        'Sélectionnez une entité pour ce compte Demandeur.'
+      );
       return;
     }
 
@@ -85,8 +90,7 @@ export default function Utilisateurs() {
 
     try {
       const donnees = {
-        username: form.username.trim(),
-        password: form.password,
+        email: form.email.trim(),
         first_name: form.first_name.trim(),
         last_name: form.last_name.trim(),
         role: form.role,
@@ -99,9 +103,14 @@ export default function Utilisateurs() {
       await api.create('utilisateurs', donnees);
 
       setForm(FORM_INITIAL);
-      setMessage('Compte créé avec succès.');
+
+      setMessage(
+        'Compte créé. Un e-mail contenant les informations '
+        + 'de connexion a été envoyé à la personne.'
+      );
 
       await charger();
+
     } catch (e) {
       setErreur(e.message);
     } finally {
@@ -119,24 +128,59 @@ export default function Utilisateurs() {
       });
 
       setMessage(
-        `Le compte ${utilisateur.username} a été ${
+        `Le compte de ${nomComplet(utilisateur)} a été ${
           utilisateur.actif ? 'désactivé' : 'activé'
         }.`
       );
 
       await charger();
+
     } catch (e) {
       setErreur(e.message);
     }
   }
 
+  async function renvoyerMotDePasse(utilisateur) {
+    setErreur('');
+    setMessage('');
+
+    try {
+      const resultat = await api.renvoyerMotDePasse(
+        utilisateur.id
+      );
+
+      setMessage(
+        resultat.message
+        || 'Nouveau mot de passe temporaire envoyé.'
+      );
+
+    } catch (e) {
+      setErreur(e.message);
+    }
+  }
+
+  function nomComplet(utilisateur) {
+    return [
+      utilisateur.first_name,
+      utilisateur.last_name,
+    ]
+      .filter(Boolean)
+      .join(' ') || 'Nom non renseigné';
+  }
+
   function nomRole(role) {
-    const trouve = ROLES.find((r) => r.value === role);
+    const trouve = ROLES.find(
+      (r) => r.value === role
+    );
+
     return trouve ? trouve.label : role;
   }
 
   function nomEntite(utilisateur) {
-    if (!utilisateur.entites || utilisateur.entites.length === 0) {
+    if (
+      !utilisateur.entites
+      || utilisateur.entites.length === 0
+    ) {
       return '—';
     }
 
@@ -144,7 +188,9 @@ export default function Utilisateurs() {
       (e) => e.id === utilisateur.entites[0]
     );
 
-    return entite ? entite.nom_entite : 'Entité inconnue';
+    return entite
+      ? entite.nom_entite
+      : 'Entité inconnue';
   }
 
   if (loading) {
@@ -164,33 +210,33 @@ export default function Utilisateurs() {
     <>
       <PageHeader
         titre="Gestion des utilisateurs"
-        sousTitre="Création et gestion des comptes de la plateforme."
+        sousTitre="Création et gestion des comptes individuels."
       />
 
-      {erreur && <Alert type="erreur">{erreur}</Alert>}
-      {message && <Alert type="ok">{message}</Alert>}
+      {erreur && (
+        <Alert type="erreur">
+          {erreur}
+        </Alert>
+      )}
+
+      {message && (
+        <Alert type="ok">
+          {message}
+        </Alert>
+      )}
 
       <Card titre="Créer un compte utilisateur">
         <form onSubmit={creerUtilisateur}>
           <div className="form-grille">
-            <Field label="Nom d'utilisateur">
+            <Field label="Adresse e-mail">
               <input
-                type="text"
-                value={form.username}
-                onChange={(e) => changer('username', e.target.value)}
+                type="email"
+                value={form.email}
+                onChange={(e) =>
+                  changer('email', e.target.value)
+                }
                 required
-                autoComplete="off"
-              />
-            </Field>
-
-            <Field label="Mot de passe">
-              <input
-                type="password"
-                value={form.password}
-                onChange={(e) => changer('password', e.target.value)}
-                required
-                minLength={8}
-                autoComplete="new-password"
+                autoComplete="email"
               />
             </Field>
 
@@ -198,7 +244,10 @@ export default function Utilisateurs() {
               <input
                 type="text"
                 value={form.first_name}
-                onChange={(e) => changer('first_name', e.target.value)}
+                onChange={(e) =>
+                  changer('first_name', e.target.value)
+                }
+                required
               />
             </Field>
 
@@ -206,7 +255,10 @@ export default function Utilisateurs() {
               <input
                 type="text"
                 value={form.last_name}
-                onChange={(e) => changer('last_name', e.target.value)}
+                onChange={(e) =>
+                  changer('last_name', e.target.value)
+                }
+                required
               />
             </Field>
 
@@ -219,7 +271,10 @@ export default function Utilisateurs() {
                 }}
               >
                 {ROLES.map((role) => (
-                  <option key={role.value} value={role.value}>
+                  <option
+                    key={role.value}
+                    value={role.value}
+                  >
                     {role.label}
                   </option>
                 ))}
@@ -230,13 +285,20 @@ export default function Utilisateurs() {
               <Field label="Entité associée">
                 <select
                   value={form.entite}
-                  onChange={(e) => changer('entite', e.target.value)}
+                  onChange={(e) =>
+                    changer('entite', e.target.value)
+                  }
                   required
                 >
-                  <option value="">— Sélectionner une entité —</option>
+                  <option value="">
+                    — Sélectionner une entité —
+                  </option>
 
                   {entites.map((entite) => (
-                    <option key={entite.id} value={entite.id}>
+                    <option
+                      key={entite.id}
+                      value={entite.id}
+                    >
                       {entite.nom_entite}
                     </option>
                   ))}
@@ -247,9 +309,9 @@ export default function Utilisateurs() {
 
           {form.role === 'demandeur' && (
             <Alert type="info">
-              Ce compte sera partagé par les agents autorisés de cette
-              entité. Une entité ne peut posséder qu'un seul compte
-              Demandeur.
+              Chaque Demandeur possède son propre compte.
+              Plusieurs comptes peuvent être associés à la
+              même entité.
             </Alert>
           )}
 
@@ -257,7 +319,9 @@ export default function Utilisateurs() {
             <input
               type="checkbox"
               checked={form.actif}
-              onChange={(e) => changer('actif', e.target.checked)}
+              onChange={(e) =>
+                changer('actif', e.target.checked)
+              }
             />
             Compte actif
           </label>
@@ -268,7 +332,9 @@ export default function Utilisateurs() {
               className="btn btn-primary"
               disabled={enregistrement}
             >
-              {enregistrement ? 'Création...' : 'Créer le compte'}
+              {enregistrement
+                ? 'Création...'
+                : 'Créer le compte'}
             </button>
           </div>
         </form>
@@ -276,33 +342,37 @@ export default function Utilisateurs() {
 
       <Card titre="Comptes existants">
         {utilisateurs.length === 0 ? (
-          <Empty>Aucun utilisateur enregistré.</Empty>
+          <Empty>
+            Aucun utilisateur enregistré.
+          </Empty>
         ) : (
           <div className="table-wrap">
             <table className="table">
               <thead>
                 <tr>
-                  <th>Identifiant</th>
-                  <th>Nom</th>
+                  <th>Nom complet</th>
+                  <th>E-mail</th>
                   <th>Rôle</th>
                   <th>Entité</th>
                   <th>Statut</th>
-                  <th>Action</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
 
               <tbody>
                 {utilisateurs.map((utilisateur) => (
                   <tr key={utilisateur.id}>
-                    <td>{utilisateur.username}</td>
-
                     <td>
-                      {[utilisateur.first_name, utilisateur.last_name]
-                        .filter(Boolean)
-                        .join(' ') || '—'}
+                      {nomComplet(utilisateur)}
                     </td>
 
-                    <td>{nomRole(utilisateur.role)}</td>
+                    <td>
+                      {utilisateur.email || '—'}
+                    </td>
+
+                    <td>
+                      {nomRole(utilisateur.role)}
+                    </td>
 
                     <td>
                       {utilisateur.role === 'demandeur'
@@ -312,7 +382,9 @@ export default function Utilisateurs() {
 
                     <td>
                       <span className="badge">
-                        {utilisateur.actif ? 'Actif' : 'Désactivé'}
+                        {utilisateur.actif
+                          ? 'Actif'
+                          : 'Désactivé'}
                       </span>
                     </td>
 
@@ -320,9 +392,23 @@ export default function Utilisateurs() {
                       <button
                         type="button"
                         className="btn btn-sm"
-                        onClick={() => changerStatut(utilisateur)}
+                        onClick={() =>
+                          changerStatut(utilisateur)
+                        }
                       >
-                        {utilisateur.actif ? 'Désactiver' : 'Activer'}
+                        {utilisateur.actif
+                          ? 'Désactiver'
+                          : 'Activer'}
+                      </button>
+
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() =>
+                          renvoyerMotDePasse(utilisateur)
+                        }
+                      >
+                        Renvoyer un mot de passe
                       </button>
                     </td>
                   </tr>

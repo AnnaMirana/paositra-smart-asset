@@ -22,5 +22,6 @@ urlpatterns = [
     path('auth/me/', auth_api.me),
     path('auth/login/', auth_api.login_view),
     path('auth/logout/', auth_api.logout_view),
+    path('auth/changer-mot-de-passe/', auth_api.changer_mot_de_passe),
     path('', include(router.urls)),
 ]

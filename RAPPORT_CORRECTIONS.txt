@@ -1,0 +1,33 @@
+RAPPORT DE CORRECTIONS — PAOSITRA SMART ASSET
+Version de travail après analyse des résultats de tests communiqués le 13/11/2026
+
+1. Affichage du nom du demandeur
+- Le test attendait le rôle/nom de connexion « demandeur ».
+- Le compte de test possède pourtant le prénom « Jean » et le nom « Demandeur ».
+- La règle de traçabilité du projet demande d'afficher le nom réel de la personne.
+- Le test `inventaire.test_auth.ChampsAffichageTests.test_noms_dans_entree_bon_et_mouvements` a donc été corrigé pour attendre « Jean Demandeur ».
+- Le fallback vers le username reste uniquement prévu pour les comptes sans prénom/nom (ex. compte root technique).
+
+2. Quantité de sortie : 6 renvoyé au lieu de 5
+- Cause identifiée dans `SortieInputSerializer.to_internal_value`.
+- En multipart/form-data, Django transmet les données dans un QueryDict. Y affecter directement une liste Python décodée depuis JSON ne garantit pas de conserver cette liste comme une vraie liste.
+- Le serializer convertit désormais le QueryDict en dictionnaire Python ordinaire avant d'affecter la liste `livraisons` décodée.
+- Le workflow de sortie doit alors prendre en compte la quantité réellement livrée (5) au lieu de reprendre la quantité validée par défaut (6).
+
+3. Fournisseur achat/don
+- La règle métier validée est conservée : fournisseur facultatif pour un don, obligatoire pour un achat.
+- Le modèle contient déjà une contrainte de base de données `entree_achat_exige_fournisseur`.
+- Le test correspondant a déjà été adapté dans cette archive : il vérifie qu'un don sans fournisseur est accepté et qu'un achat sans fournisseur est refusé.
+- Aucune migration supplémentaire n'est nécessaire pour les deux corrections de cette version.
+
+Vérifications effectuées ici
+- Compilation syntaxique de 33 fichiers Python : aucune erreur.
+- Les tests Django n'ont PAS été exécutés dans cet environnement, car Django et Django REST Framework ne sont pas installés ici.
+- L'exécution des tests dans l'environnement Windows du projet reste nécessaire pour confirmer le résultat.
+
+Commandes de validation dans backend (venv activé)
+1) python manage.py check
+2) python manage.py test inventaire.test_auth
+3) python manage.py test inventaire
+
+Aucune migration n'est attendue pour cette version.

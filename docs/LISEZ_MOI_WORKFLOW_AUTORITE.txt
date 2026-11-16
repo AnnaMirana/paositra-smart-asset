@@ -1,0 +1,33 @@
+PAOSITRA SMART ASSET — Patch du workflow d'autorisation DSID
+
+Contenu : fichiers Python COMPLETS à remplacer dans les mêmes chemins du projet.
+
+Nouveau circuit :
+1. Demandeur soumet le Bon de Sortie.
+2. Le Bon passe à en_attente_choix_autorite.
+3. Un compte Agent DSID choisit une autorité unique pour tout le Bon : dg, dga ou directeur_dsid.
+4. Seul un compte dont le rôle correspond exactement à l'autorité choisie peut décider, ligne par ligne, de la quantité accordée (0 = refus).
+5. Lorsque toutes les lignes ont été traitées, le Bon passe à valide s'il reste au moins une ligne accordée, sinon à refuse.
+6. Le CAME peut ensuite enregistrer la sortie physique.
+
+Traçabilité :
+- BonSortie conserve l'autorité choisie, le compte DSID qui l'a choisie et la date du choix.
+- Chaque décision de ligne est conservée dans Intervient avec le compte de l'autorité, la date, la quantité décidée et le motif.
+- Le rôle agent_validation (DCA) est conservé pour les anciens comptes/historiques, mais n'a plus d'accès au circuit ni d'action de validation.
+- Les anciennes décisions DCA restent dans l'historique. Les Bons encore en cours dans l'ancien workflow sont réouverts à l'étape de choix DSID par la migration 0012 ; leurs anciennes interventions ne sont pas supprimées.
+
+API :
+- POST /api/bons-sortie/{id}/soumettre/
+- POST /api/bons-sortie/{id}/choisir_autorite/ avec {"autorite":"dg"}, {"autorite":"dga"} ou {"autorite":"directeur_dsid"}
+- POST /api/lignes-bsortie/{id}/autoriser/ avec {"quantite": 5, "motif":"..."}
+- L'ancienne route /api/lignes-bsortie/{id}/valider/ est retirée.
+
+Installation :
+1. Remplacer les fichiers selon leur chemin dans l'archive.
+2. Depuis le dossier backend : python manage.py migrate
+3. Vérifier : python manage.py check
+4. Tester : python manage.py test inventaire
+
+Vérification effectuée ici : check Django sans erreur, aucune migration manquante (makemigrations --check), 79 tests inventaire réussis sous SQLite. Les tests doivent encore être relancés dans l'environnement PostgreSQL local.
+
+Note : l'archive source fournie pour cette intervention ne contenait que le backend ; aucune interface frontend n'a donc été modifiée.

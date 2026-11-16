@@ -7,7 +7,11 @@ class Utilisateur(AbstractUser):
     ROLE_CHOICES = [
         ('admin', 'Administrateur'),
         ('agent_dsid', 'Agent DSID'),
-        ('agent_validation', 'Agent de validation (DCA)'),
+        # Conservé pour les anciens comptes/historiques, mais plus utilisé dans le workflow de sortie.
+        ('agent_validation', 'Ancien agent de validation (DCA)'),
+        ('dg', 'Directeur Général (DG)'),
+        ('dga', 'Directeur Général Adjoint (DGA)'),
+        ('directeur_dsid', 'Directeur DSID'),
         ('agent_came', 'Agent CAME'),
         ('demandeur', 'Demandeur'),
         ('agent_direction', 'Agent de direction'),
@@ -16,6 +20,8 @@ class Utilisateur(AbstractUser):
 
     role = models.CharField(max_length=30, choices=ROLE_CHOICES)
     actif = models.BooleanField(default=True)
+    doit_changer_mot_de_passe = models.BooleanField(default=False)
+    mot_de_passe_temporaire_expire_le = models.DateTimeField(null=True, blank=True)
     entites = models.ManyToManyField('Entite', related_name='utilisateurs', blank=True)
 
     def save(self, *args, **kwargs):
@@ -93,9 +99,26 @@ class Entree(models.Model):
     ref_entree = models.CharField(max_length=100, unique=True)
     origine = models.CharField(max_length=20, choices=ORIGINE_CHOICES)
 
-    # Fournisseur obligatoire (Mois 2).
-    fournisseur = models.ForeignKey(Fournisseur, on_delete=models.PROTECT, related_name='entrees')
+    # Un fournisseur est requis pour un achat, mais pas nécessairement pour un don.
+    fournisseur = models.ForeignKey(
+        Fournisseur, on_delete=models.PROTECT, related_name='entrees',
+        null=True, blank=True
+    )
     utilisateur = models.ForeignKey(Utilisateur, on_delete=models.PROTECT, related_name='entrees_enregistrees')
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(origine='don') | models.Q(fournisseur__isnull=False),
+                name='entree_achat_exige_fournisseur',
+            ),
+        ]
+
+    def clean(self):
+        if self.origine == 'achat' and not self.fournisseur_id:
+            raise ValidationError({
+                'fournisseur': "Un fournisseur doit être indiqué pour une entrée provenant d'un achat."
+            })
 
     def __str__(self):
         return f"Entrée {self.ref_entree} du {self.date_entree}"
@@ -127,8 +150,10 @@ class Article(models.Model):
 class BonSortie(models.Model):
     STATUT_CHOICES = [
         ('brouillon', 'Brouillon'),
-        ('en_attente_autorisation', "En attente d'autorisation"),
-        ('en_attente_validation', 'En attente de validation'),
+        ('en_attente_choix_autorite', "En attente du choix de l'autorité par le DSID"),
+        ('en_attente_autorisation', "En attente de la décision de l'autorité"),
+        # Statut historique conservé pour les anciens bons déjà traités par le DCA.
+        ('en_attente_validation', 'Ancienne étape de validation DCA'),
         ('valide', 'Validé'),
         ('refuse', 'Refusé'),
         ('sorti', 'Sorti'),
@@ -145,6 +170,19 @@ class BonSortie(models.Model):
     entite = models.ForeignKey(Entite, on_delete=models.PROTECT, related_name='bons_sortie')
     # Créateur/demandeur (Mois 2, relation qui manquait au Mois 1).
     utilisateur = models.ForeignKey(Utilisateur, on_delete=models.PROTECT, related_name='bons_sortie_crees')
+
+    AUTORITE_CHOICES = [
+        ('dg', 'Directeur Général (DG)'),
+        ('dga', 'Directeur Général Adjoint (DGA)'),
+        ('directeur_dsid', 'Directeur DSID'),
+    ]
+    # Choix unique du DSID pour l'ensemble du Bon de Sortie.
+    autorite_choisie = models.CharField(max_length=30, choices=AUTORITE_CHOICES, blank=True, null=True)
+    autorite_choisie_par = models.ForeignKey(
+        Utilisateur, on_delete=models.PROTECT, blank=True, null=True,
+        related_name='choix_autorite_bons_sortie'
+    )
+    autorite_choisie_le = models.DateTimeField(blank=True, null=True)
 
     def __str__(self):
         return self.reference_bs
@@ -180,7 +218,8 @@ class Intervient(models.Model):
     """
     ROLE_CHOICES = [
         ('autorisation', 'Autorisation DSID'),
-        ('validation', 'Validation DCA'),
+        # Valeur historique conservée pour les interventions antérieures à la nouvelle règle.
+        ('validation', 'Ancienne validation DCA'),
     ]
 
     ligne_bsortie = models.ForeignKey(LigneBSortie, on_delete=models.CASCADE, related_name='interventions')

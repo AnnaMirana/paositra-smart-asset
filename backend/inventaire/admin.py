@@ -27,9 +27,9 @@ class LectureSeuleAdmin(admin.ModelAdmin):
 
 @admin.register(Utilisateur)
 class UtilisateurAdmin(UserAdmin):
-    list_display = ('username', 'role', 'actif', 'is_staff')
+    list_display = ('username', 'email', 'role', 'actif', 'doit_changer_mot_de_passe', 'is_staff')
     fieldsets = UserAdmin.fieldsets + (
-        ('Paositra', {'fields': ('role', 'actif', 'entites')}),
+        ('Paositra', {'fields': ('role', 'actif', 'entites', 'doit_changer_mot_de_passe', 'mot_de_passe_temporaire_expire_le')}),
     )
 
 
@@ -145,7 +145,10 @@ class BonSortieAdmin(admin.ModelAdmin):
     inlines = [LigneBSortieInline]
 
     def get_readonly_fields(self, request, obj=None):
-        champs = ['statut', 'utilisateur']  # statut : géré par le workflow ; utilisateur : compte connecté
+        champs = [
+            'statut', 'utilisateur', 'autorite_choisie',
+            'autorite_choisie_par', 'autorite_choisie_le',
+        ]  # workflow et traçabilité gérés par les services, jamais saisis manuellement
         if obj is not None and obj.statut != 'brouillon':
             champs += ['reference_bs', 'document', 'date_bs', 'entite']
         return champs

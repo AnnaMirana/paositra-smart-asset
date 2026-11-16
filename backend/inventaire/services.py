@@ -4,7 +4,7 @@ Logique métier de PAOSITRA SMART ASSET (Mois 2).
 Toutes les règles sensibles vivent ICI, jamais dans les vues ni dans l'admin :
 - entrée en stock (individualisé / consommable) ;
 - workflow du Bon de Sortie, ligne par ligne :
-      Demande -> Autorisation DSID -> Validation DCA -> Sortie physique CAME ;
+      Demande -> Choix du validateur par le DSID -> Décision DG/DGA/Directeur DSID -> Sortie physique CAME ;
 - stock réservé / stock disponible pour autorisation ;
 - sortie physique (seule opération qui diminue réellement le stock).
 
@@ -15,17 +15,18 @@ réussit, soit rien n'est écrit. Les vérifications se font AVANT les écriture
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import Sum
+from django.utils import timezone
 
 from .models import (
     Article, BonSortie, Intervient, LigneBSortie, LigneEntree,
     LigneSortie, Mouvement, Sortie, TypeArticle,
 )
 
-# Rôles autorisés pour chaque étape du workflow (is_superuser est toujours accepté).
-# PROPOSITION — À VALIDER : contrôle de rôle minimal, pas de système de permissions détaillé.
+# Rôles des étapes du workflow. Le choix DSID et la décision de l'autorité
+# exigent le rôle exact : un administrateur ne peut pas se substituer à eux.
 ROLES_SOUMISSION = {'demandeur', 'agent_direction'}
-ROLES_AUTORISATION = {'agent_dsid'}
-ROLES_VALIDATION = {'agent_validation'}
+ROLES_CHOIX_AUTORITE = {'agent_dsid'}
+ROLES_AUTORISATION = {'dg', 'dga', 'directeur_dsid'}
 ROLES_SORTIE = {'agent_came'}
 
 
@@ -103,7 +104,7 @@ def enregistrer_ligne_entree(entree, type_article: TypeArticle, quantite: int, u
                     type_mouvement='entree',
                     article=article,
                     utilisateur=utilisateur,
-                    utilisateur_nom_saisi=nom_agent or utilisateur.get_full_name() or utilisateur.username,
+                    utilisateur_nom_saisi=nom_agent or utilisateur.get_full_name() or 'Nom non renseigné',
                     utilisateur_role_saisi=utilisateur.get_role_display(),
                     operation_ref=f"ENT-{entree.ref_entree}-L{ligne.id}",
                 )
@@ -115,7 +116,7 @@ def enregistrer_ligne_entree(entree, type_article: TypeArticle, quantite: int, u
             type_article=type_verrouille,
             quantite=quantite,
             utilisateur=utilisateur,
-            utilisateur_nom_saisi=nom_agent or utilisateur.get_full_name() or utilisateur.username,
+            utilisateur_nom_saisi=nom_agent or utilisateur.get_full_name() or 'Nom non renseigné',
             utilisateur_role_saisi=utilisateur.get_role_display(),
             operation_ref=f"ENT-{entree.ref_entree}-L{ligne.id}",
         )
@@ -127,32 +128,41 @@ def enregistrer_ligne_entree(entree, type_article: TypeArticle, quantite: int, u
 # ---------------------------------------------------------------------------
 
 def _recalculer_statut(bon_sortie):
-    """
-    Met à jour BonSortie.statut à partir de l'état des lignes (jamais saisi à la main).
-      EN_ATTENTE_AUTORISATION : tant qu'une ligne est encore 'demandee'.
-        -> toutes traitées par le DSID : EN_ATTENTE_VALIDATION s'il reste une ligne
-           autorisée, sinon REFUSE (toutes refusées).
-      EN_ATTENTE_VALIDATION : tant qu'une ligne est encore 'autorisee'.
-        -> toutes traitées par le DCA : VALIDE s'il reste une ligne validée,
-           sinon REFUSE (tout refusé/rejeté).
-    Les lignes refusées/rejetées ne bloquent jamais les autres lignes.
-    """
-    etats = list(bon_sortie.lignes.values_list('etat_ligne', flat=True))
-    if bon_sortie.statut == 'en_attente_autorisation':
-        if 'demandee' in etats:
-            return
-        bon_sortie.statut = 'en_attente_validation' if 'autorisee' in etats else 'refuse'
-    elif bon_sortie.statut == 'en_attente_validation':
-        if 'autorisee' in etats:
-            return
-        bon_sortie.statut = 'valide' if 'validee' in etats else 'refuse'
-    else:
+    """Après les décisions de l'autorité, le BS devient validé ou refusé."""
+    if bon_sortie.statut != 'en_attente_autorisation':
         return
+    etats = list(bon_sortie.lignes.values_list('etat_ligne', flat=True))
+    if 'demandee' in etats:
+        return
+    bon_sortie.statut = 'valide' if 'validee' in etats else 'refuse'
     bon_sortie.save(update_fields=['statut'])
 
 
+def choisir_autorite(bon_sortie, utilisateur, autorite):
+    """Le DSID choisit une seule autorité pour tout le Bon de Sortie."""
+    if not utilisateur.actif or utilisateur.role not in ROLES_CHOIX_AUTORITE:
+        raise PermissionDenied("Seul un compte Agent DSID actif peut choisir l'autorité.")
+    choix_valides = {code for code, _ in BonSortie.AUTORITE_CHOICES}
+    if autorite not in choix_valides:
+        raise ValidationError("Autorité invalide. Choisissez DG, DGA ou Directeur DSID.")
+
+    with transaction.atomic():
+        bs = BonSortie.objects.select_for_update().get(pk=bon_sortie.pk)
+        if bs.statut != 'en_attente_choix_autorite':
+            raise ValidationError("Le choix de l'autorité n'est possible qu'après la soumission du bon et avant toute décision.")
+        if bs.autorite_choisie:
+            raise ValidationError("Une autorité a déjà été choisie pour ce bon de sortie.")
+        bs.autorite_choisie = autorite
+        bs.autorite_choisie_par = utilisateur
+        bs.autorite_choisie_le = timezone.now()
+        bs.statut = 'en_attente_autorisation'
+        bs.save(update_fields=['autorite_choisie', 'autorite_choisie_par', 'autorite_choisie_le', 'statut'])
+    bon_sortie.refresh_from_db()
+    return bon_sortie
+
+
 def soumettre_bon_sortie(bon_sortie, utilisateur):
-    """BROUILLON -> EN_ATTENTE_AUTORISATION (par le demandeur qui a créé le BS)."""
+    """BROUILLON -> EN_ATTENTE_CHOIX_AUTORITE (par le demandeur qui a créé le BS)."""
     _verifier_role(utilisateur, ROLES_SOUMISSION, "soumettre un bon de sortie")
     with transaction.atomic():
         bs = BonSortie.objects.select_for_update().get(pk=bon_sortie.pk)
@@ -162,28 +172,27 @@ def soumettre_bon_sortie(bon_sortie, utilisateur):
             raise ValidationError(f"Ce bon de sortie n'est plus un brouillon (statut : {bs.get_statut_display()}).")
         if not bs.lignes.exists():
             raise ValidationError("Un bon de sortie doit contenir au moins une ligne pour être soumis.")
-        bs.statut = 'en_attente_autorisation'
+        bs.statut = 'en_attente_choix_autorite'
         bs.save(update_fields=['statut'])
     bon_sortie.statut = bs.statut
     return bon_sortie
 
 
 def autoriser_ligne(ligne, utilisateur, quantite, motif=''):
-    """
-    Décision du DSID sur UNE ligne : autoriser la quantité demandée, une quantité
-    inférieure, ou refuser (quantite = 0). Motif obligatoire si quantité != demandée.
-    L'autorisation est bornée par le stock disponible pour autorisation
-    (stock physique - stock déjà réservé) : pas de sur-réservation entre BS concurrents.
-    """
-    _verifier_role(utilisateur, ROLES_AUTORISATION, "autoriser une ligne de bon de sortie")
+    """Décision ligne par ligne de l'autorité choisie par le DSID."""
     motif = (motif or '').strip()
     with transaction.atomic():
         bs = BonSortie.objects.select_for_update().get(pk=ligne.bon_sortie_id)
         ligne_db = LigneBSortie.objects.select_for_update().get(pk=ligne.pk)
-        if bs.statut != 'en_attente_autorisation':
-            raise ValidationError(f"Autorisation impossible : le bon de sortie est '{bs.get_statut_display()}'.")
+
+        if not utilisateur.actif:
+            raise PermissionDenied("Compte désactivé.")
+        if bs.statut != 'en_attente_autorisation' or not bs.autorite_choisie:
+            raise ValidationError("La décision est impossible : le DSID doit d'abord choisir l'autorité.")
+        if utilisateur.role not in ROLES_AUTORISATION or utilisateur.role != bs.autorite_choisie:
+            raise PermissionDenied("Seul le compte de l'autorité choisie par le DSID peut autoriser ou refuser cette demande.")
         if ligne_db.etat_ligne != 'demandee':
-            raise ValidationError("Cette ligne a déjà été traitée par le DSID.")
+            raise ValidationError("Cette ligne a déjà été traitée par l'autorité.")
         if quantite < 0 or quantite > ligne_db.quantite_demandee:
             raise ValidationError(
                 f"La quantité autorisée doit être comprise entre 0 et la quantité demandée ({ligne_db.quantite_demandee})."
@@ -206,45 +215,18 @@ def autoriser_ligne(ligne, utilisateur, quantite, motif=''):
             quantite_decidee=quantite, motif=motif or None,
         )
         ligne_db.quantite_autorisee = quantite
-        ligne_db.etat_ligne = 'autorisee' if quantite > 0 else 'refusee'
-        ligne_db.save(update_fields=['quantite_autorisee', 'etat_ligne'])
+        # Il n'y a plus de seconde validation DCA : la décision de l'autorité
+        # constitue directement la quantité validée pour la sortie CAME.
+        ligne_db.quantite_validee = quantite
+        ligne_db.etat_ligne = 'validee' if quantite > 0 else 'refusee'
+        ligne_db.save(update_fields=['quantite_autorisee', 'quantite_validee', 'etat_ligne'])
         _recalculer_statut(bs)
     return ligne_db
 
 
 def valider_ligne(ligne, utilisateur, quantite, motif=''):
-    """
-    Décision du DCA sur une ligne AUTORISEE : valider la quantité autorisée, la
-    diminuer, ou rejeter (quantite = 0). Motif obligatoire si quantité != autorisée.
-    Une ligne refusée par le DSID n'est jamais proposée au DCA.
-    PROPOSITION — À VALIDER : le DCA ne peut pas valider plus que la quantité autorisée
-    (sinon la réservation de stock ne serait plus garantie).
-    """
-    _verifier_role(utilisateur, ROLES_VALIDATION, "valider une ligne de bon de sortie")
-    motif = (motif or '').strip()
-    with transaction.atomic():
-        bs = BonSortie.objects.select_for_update().get(pk=ligne.bon_sortie_id)
-        ligne_db = LigneBSortie.objects.select_for_update().get(pk=ligne.pk)
-        if bs.statut != 'en_attente_validation':
-            raise ValidationError(f"Validation impossible : le bon de sortie est '{bs.get_statut_display()}'.")
-        if ligne_db.etat_ligne != 'autorisee':
-            raise ValidationError("Seules les lignes autorisées par le DSID peuvent être validées.")
-        if quantite < 0 or quantite > ligne_db.quantite_autorisee:
-            raise ValidationError(
-                f"La quantité validée doit être comprise entre 0 et la quantité autorisée ({ligne_db.quantite_autorisee})."
-            )
-        if quantite != ligne_db.quantite_autorisee and not motif:
-            raise ValidationError("Un motif est obligatoire quand la quantité validée diffère de la quantité autorisée (ou en cas de rejet).")
-
-        Intervient.objects.create(
-            ligne_bsortie=ligne_db, utilisateur=utilisateur, role_intervention='validation',
-            quantite_decidee=quantite, motif=motif or None,
-        )
-        ligne_db.quantite_validee = quantite
-        ligne_db.etat_ligne = 'validee' if quantite > 0 else 'rejetee'
-        ligne_db.save(update_fields=['quantite_validee', 'etat_ligne'])
-        _recalculer_statut(bs)
-    return ligne_db
+    """Ancienne étape DCA désactivée : l'autorité choisie décide désormais directement."""
+    raise PermissionDenied("La validation DCA a été retirée du circuit. L'autorité désignée prend la décision finale.")
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +322,7 @@ def effectuer_sortie(bon_sortie, date_sortie, utilisateur, livraisons=None, nom_
                             article=article,
                             utilisateur=utilisateur,
                             entite=bs.entite,
-                            utilisateur_nom_saisi=nom_agent or utilisateur.get_full_name() or utilisateur.username,
+                            utilisateur_nom_saisi=nom_agent or utilisateur.get_full_name() or 'Nom non renseigné',
                             utilisateur_role_saisi=utilisateur.get_role_display(),
                             operation_ref=sortie.ref_sortie,
                         )
@@ -351,7 +333,7 @@ def effectuer_sortie(bon_sortie, date_sortie, utilisateur, livraisons=None, nom_
                         quantite=livree,
                         utilisateur=utilisateur,
                         entite=bs.entite,
-                        utilisateur_nom_saisi=nom_agent or utilisateur.get_full_name() or utilisateur.username,
+                        utilisateur_nom_saisi=nom_agent or utilisateur.get_full_name() or 'Nom non renseigné',
                         utilisateur_role_saisi=utilisateur.get_role_display(),
                         operation_ref=sortie.ref_sortie,
                     )

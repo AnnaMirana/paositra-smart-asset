@@ -1,4 +1,10 @@
 import functools
+import secrets
+import string
+from datetime import timedelta
+from django.conf import settings
+from django.core.mail import send_mail
+from django.utils import timezone
 
 from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -316,7 +322,6 @@ class EntreeViewSet(ExporterMixin, mixins.CreateModelMixin, mixins.RetrieveModel
             type_article=type_article,
             quantite=quantite,
             utilisateur=request.user,
-            nom_agent=request.session.get('agent_nom_saisi', ''),
         )
         return Response({
             'ligne_id': ligne.id,
@@ -341,6 +346,8 @@ class BonSortieViewSet(ExporterMixin, SuppressionProtegeeMixin, viewsets.ModelVi
         qs = super().get_queryset()
         user = self.request.user
         role = _role(user)
+        if role == 'agent_validation' and not _est_admin(user):
+            return qs.none()
         if role == 'demandeur' and not _est_admin(user):
             entite_ids = list(user.entites.values_list('id', flat=True))
             if len(entite_ids) != 1:
@@ -348,13 +355,18 @@ class BonSortieViewSet(ExporterMixin, SuppressionProtegeeMixin, viewsets.ModelVi
             qs = qs.filter(entite_id=entite_ids[0], utilisateur=user)
         elif role == 'agent_came' and not _est_admin(user):
             qs = qs.filter(statut__in=['valide', 'sorti'])
+        elif role in ('dg', 'dga', 'directeur_dsid') and not _est_admin(user):
+            qs = qs.filter(autorite_choisie=role)
         qs = _filtrer(qs, self.request, ['statut', 'entite'])
         return qs
 
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
         if request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
-            _exiger_roles(request, 'demandeur', 'agent_direction')
+            if getattr(self, 'action', None) == 'choisir_autorite':
+                _exiger_roles(request, 'agent_dsid')
+            else:
+                _exiger_roles(request, 'demandeur', 'agent_direction')
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -423,15 +435,23 @@ class BonSortieViewSet(ExporterMixin, SuppressionProtegeeMixin, viewsets.ModelVi
     @action(detail=True, methods=['post'], serializer_class=BonSortieSerializer)
     @gerer_erreurs_metier
     def soumettre(self, request, pk=None):
-        """BROUILLON -> EN_ATTENTE_AUTORISATION (aucun corps de requête nécessaire)."""
+        """BROUILLON -> EN_ATTENTE_CHOIX_AUTORITE."""
         bon_sortie = services.soumettre_bon_sortie(self.get_object(), request.user)
+        return Response(BonSortieSerializer(bon_sortie).data)
+
+    @action(detail=True, methods=['post'], serializer_class=serializers.Serializer)
+    @gerer_erreurs_metier
+    def choisir_autorite(self, request, pk=None):
+        """Le DSID désigne une autorité unique pour tout le Bon de Sortie."""
+        autorite = request.data.get('autorite')
+        bon_sortie = services.choisir_autorite(self.get_object(), request.user, autorite)
         return Response(BonSortieSerializer(bon_sortie).data)
 
 
 class LigneBSortieViewSet(ExporterMixin, viewsets.ReadOnlyModelViewSet):
     """
     Lignes de demande. Filtres : ?bon_sortie=, ?etat_ligne=, ?type_article=.
-    Le DCA ne traite que ?etat_ligne=autorisee ; une ligne refusée par le DSID ne lui est jamais proposée.
+    L'autorité choisie par le DSID traite les lignes une par une.
     """
     queryset = LigneBSortie.objects.select_related('bon_sortie', 'type_article').order_by('id')
     serializer_class = LigneBSortieSerializer
@@ -440,6 +460,8 @@ class LigneBSortieViewSet(ExporterMixin, viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
         user = self.request.user
+        if _role(user) == 'agent_validation' and not _est_admin(user):
+            return qs.none()
         if _role(user) == 'demandeur' and not _est_admin(user):
             ids = list(user.entites.values_list('id', flat=True))
             if len(ids) != 1:
@@ -447,12 +469,14 @@ class LigneBSortieViewSet(ExporterMixin, viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(bon_sortie__entite_id=ids[0], bon_sortie__utilisateur=user)
         elif _role(user) == 'agent_came' and not _est_admin(user):
             qs = qs.filter(bon_sortie__statut__in=['valide', 'sorti'])
+        elif _role(user) in ('dg', 'dga', 'directeur_dsid') and not _est_admin(user):
+            qs = qs.filter(bon_sortie__autorite_choisie=_role(user))
         return _filtrer(qs, self.request, ['bon_sortie', 'etat_ligne', 'type_article'])
 
     @action(detail=True, methods=['post'], serializer_class=DecisionLigneSerializer)
     @gerer_erreurs_metier
     def autoriser(self, request, pk=None):
-        """DSID : quantite = quantité autorisée (0 = refus). Motif obligatoire si différente de la demande."""
+        """Autorité désignée : quantite = quantité accordée (0 = refus). Motif si décision partielle ou refus."""
         ligne = self.get_object()
         decision = self.get_serializer(data=request.data)
         decision.is_valid(raise_exception=True)
@@ -461,21 +485,11 @@ class LigneBSortieViewSet(ExporterMixin, viewsets.ReadOnlyModelViewSet):
         )
         return Response(LigneBSortieSerializer(ligne).data)
 
-    @action(detail=True, methods=['post'], serializer_class=DecisionLigneSerializer)
-    @gerer_erreurs_metier
-    def valider(self, request, pk=None):
-        """DCA : quantite = quantité validée (0 = rejet). Motif obligatoire si différente de l'autorisation."""
-        ligne = self.get_object()
-        decision = self.get_serializer(data=request.data)
-        decision.is_valid(raise_exception=True)
-        ligne = services.valider_ligne(
-            ligne, request.user, decision.validated_data['quantite'], decision.validated_data.get('motif', ''),
-        )
-        return Response(LigneBSortieSerializer(ligne).data)
+
 
 
 class IntervientViewSet(ExporterMixin, viewsets.ReadOnlyModelViewSet):
-    """Historique des décisions (autorisations / validations), jamais supprimé ni modifié."""
+    """Historique des décisions de l’autorité (et anciennes validations conservées), en lecture seule."""
     queryset = Intervient.objects.all().order_by('-date_intervention')
     serializer_class = IntervientSerializer
     permission_classes = [IsAuthenticated]
@@ -483,11 +497,15 @@ class IntervientViewSet(ExporterMixin, viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
         user = self.request.user
+        if _role(user) == 'agent_validation' and not _est_admin(user):
+            return qs.none()
         if _role(user) == 'demandeur' and not _est_admin(user):
             ids = list(user.entites.values_list('id', flat=True))
             if len(ids) != 1:
                 return qs.none()
             qs = qs.filter(ligne_bsortie__bon_sortie__entite_id=ids[0], ligne_bsortie__bon_sortie__utilisateur=user)
+        elif _role(user) in ('dg', 'dga', 'directeur_dsid') and not _est_admin(user):
+            qs = qs.filter(ligne_bsortie__bon_sortie__autorite_choisie=_role(user))
         return _filtrer(qs, self.request, ['ligne_bsortie', 'role_intervention'])
 
 
@@ -515,10 +533,7 @@ class SortieViewSet(ExporterMixin, viewsets.ReadOnlyModelViewSet):
         """CAME : sortie physique d'un BS validé. `livraisons` optionnel : quantités réellement livrées par ligne."""
         donnees = self.get_serializer(data=request.data)
         donnees.is_valid(raise_exception=True)
-        try:
-            bon_sortie = BonSortie.objects.get(pk=donnees.validated_data['bon_sortie'])
-        except BonSortie.DoesNotExist:
-            return Response({'erreur': 'Bon de sortie introuvable.'}, status=status.HTTP_404_NOT_FOUND)
+        bon_sortie = donnees.validated_data['bon_sortie']
 
         livraisons = {
             l['ligne_bsortie']: l['quantite_livree'] for l in donnees.validated_data.get('livraisons', [])
@@ -528,8 +543,7 @@ class SortieViewSet(ExporterMixin, viewsets.ReadOnlyModelViewSet):
             donnees.validated_data['date_sortie'],
             request.user,
             livraisons,
-            nom_agent=request.session.get('agent_nom_saisi', ''),
-            document_livraison=donnees.validated_data['document_livraison'],
+            document_livraison=donnees.validated_data.get('document_livraison'),
         )
         return Response(SortieSerializer(sortie).data, status=status.HTTP_201_CREATED)
 
@@ -590,30 +604,33 @@ class UtilisateurViewSet(
 
         return UtilisateurProfileSerializer
 
+    @action(detail=True, methods=['post'], url_path='renvoyer-mot-de-passe')
+    def renvoyer_mot_de_passe(self, request, pk=None):
+        utilisateur = self.get_object()
+        alphabet = string.ascii_letters + string.digits + "!@#$%_-"
+        temporaire = ''.join(secrets.choice(alphabet) for _ in range(20))
+        try:
+            envoye = send_mail(
+                "Nouveau mot de passe temporaire PAOSITRA SMART ASSET",
+                f"Bonjour {utilisateur.get_full_name() or 'Utilisateur'},\\n\\n"
+                f"Nom de connexion : {utilisateur.get_full_name()}\\n"
+                f"Nouveau mot de passe temporaire : {temporaire}\\n"
+                "Il expire dans 24 heures et devra être remplacé à la prochaine connexion.",
+                settings.DEFAULT_FROM_EMAIL, [utilisateur.email], fail_silently=False
+            )
+            if envoye != 1:
+                raise RuntimeError("Envoi non confirmé")
+        except Exception:
+            return Response(
+                {'erreur': "Impossible d'envoyer l'e-mail. Le compte n'a pas été modifié."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        utilisateur.set_password(temporaire)
+        utilisateur.doit_changer_mot_de_passe = True
+        utilisateur.mot_de_passe_temporaire_expire_le = timezone.now() + timedelta(hours=24)
+        utilisateur.save()
+        return Response({'message': "Nouveau mot de passe temporaire envoyé par e-mail."})
+
     @transaction.atomic
     def perform_create(self, serializer):
-        donnees = serializer.validated_data
-
-        if donnees.get('role') == 'demandeur':
-            entites = donnees.get('entites', [])
-
-            if len(entites) != 1:
-                raise DRFValidationError({
-                    'entites': 'Un compte Demandeur doit avoir exactement une entité.'
-                })
-
-            entite = Entite.objects.select_for_update().get(
-                pk=entites[0].pk
-            )
-
-            compte_existant = Utilisateur.objects.filter(
-                role='demandeur',
-                entites=entite
-            ).exists()
-
-            if compte_existant:
-                raise DRFValidationError({
-                    'entites': 'Un compte Demandeur existe déjà pour cette entité.'
-                })
-
         serializer.save()

@@ -1,132 +1,107 @@
+
 import {
-    createContext,
-    useCallback,
-    useContext,
-    useEffect,
-    useMemo,
-    useState
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
 } from 'react';
 
 import { api } from '../api';
-
 import {
-    definirGestionnaireNonAutorise,
-    messageErreur
+  definirGestionnaireNonAutorise,
+  messageErreur,
 } from '../api/client';
 
 const AuthContext = createContext(null);
 
-
 export function AuthProvider({ children }) {
+  const [user, setUser] = useState(undefined);
+  const [erreurServeur, setErreurServeur] = useState('');
 
-    const [user, setUser] = useState(undefined);
-    const [erreurServeur, setErreurServeur] = useState('');
+  const rafraichir = useCallback(async () => {
+    try {
+      const profil = await api.me();
 
+      setUser(profil.authentifie ? profil : null);
+      setErreurServeur('');
+    } catch (e) {
+      setUser(null);
+      setErreurServeur(messageErreur(e));
+    }
+  }, []);
 
-    // Vérifier la session Django existante.
-    const rafraichir = useCallback(async () => {
+  useEffect(() => {
+    definirGestionnaireNonAutorise(rafraichir);
+    rafraichir();
+  }, [rafraichir]);
 
-        try {
+  const login = useCallback(async (nom, password) => {
+    if (!nom || !nom.trim() || !password) {
+      throw new Error('Le nom et le mot de passe sont obligatoires.');
+    }
 
-            const profil = await api.me();
+    const profil = await api.login(nom.trim(), password);
 
-            setUser(
-                profil.authentifie ? profil : null
-            );
+    setUser(profil);
+    setErreurServeur('');
 
-            setErreurServeur('');
+    return profil;
+  }, []);
 
-        } catch (e) {
+  const changerMotDePasse = useCallback(
+    async (
+      ancien_mot_de_passe,
+      nouveau_mot_de_passe,
+      confirmation
+    ) => {
+      const profil = await api.changerMotDePasse({
+        ancien_mot_de_passe,
+        nouveau_mot_de_passe,
+        confirmation,
+      });
 
-            setUser(null);
-            setErreurServeur(messageErreur(e));
+      setUser(profil);
+      return profil;
+    },
+    []
+  );
 
-        }
+  const logout = useCallback(async () => {
+    try {
+      await api.logout();
+    } finally {
+      setUser(null);
+    }
+  }, []);
 
-    }, []);
+  const valeur = useMemo(
+    () => ({
+      user,
+      erreurServeur,
+      login,
+      logout,
+      changerMotDePasse,
+      rafraichir,
+    }),
+    [
+      user,
+      erreurServeur,
+      login,
+      logout,
+      changerMotDePasse,
+      rafraichir,
+    ]
+  );
 
-
-    useEffect(() => {
-
-        definirGestionnaireNonAutorise(rafraichir);
-
-        rafraichir();
-
-    }, [rafraichir]);
-
-
-    // Connexion avec identité déclarée.
-    const login = useCallback(
-        async (username, password, nomAgent) => {
-
-            if (!nomAgent || !nomAgent.trim()) {
-                throw new Error(
-                    "Le nom et prénom de l'agent sont obligatoires."
-                );
-            }
-
-            // Transmission des trois informations à Django.
-            const profil = await api.login(
-                username,
-                password,
-                nomAgent.trim()
-            );
-
-            // Le profil retourné contient le nom de la session.
-            setUser(profil);
-
-            setErreurServeur('');
-
-            return profil;
-
-        },
-        []
-    );
-
-
-    // Déconnexion.
-    const logout = useCallback(async () => {
-
-        try {
-
-            await api.logout();
-
-        } finally {
-
-            setUser(null);
-
-        }
-
-    }, []);
-
-
-    const valeur = useMemo(
-        () => ({
-            user,
-            erreurServeur,
-            login,
-            logout
-        }),
-        [
-            user,
-            erreurServeur,
-            login,
-            logout
-        ]
-    );
-
-
-    return (
-        <AuthContext.Provider value={valeur}>
-            {children}
-        </AuthContext.Provider>
-    );
-
+  return (
+    <AuthContext.Provider value={valeur}>
+      {children}
+    </AuthContext.Provider>
+  );
 }
 
-
 export function useAuth() {
-
-    return useContext(AuthContext);
-
+  return useContext(AuthContext);
 }
